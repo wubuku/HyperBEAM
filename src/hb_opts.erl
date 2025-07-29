@@ -137,6 +137,11 @@ default_message() ->
         snp_trusted => [],
         routes => [
             #{
+                % Routes for the weavedb device to use a rollup node, if requested.
+                <<"template">> => <<"/weavedb/.*">>,
+                <<"node">> => #{ <<"prefix">> => <<"http://localhost:6364">> }
+            },
+            #{
                 % Routes for the genesis-wasm device to use a local CU, if requested.
                 <<"template">> => <<"/result/.*">>,
                 <<"node">> => #{ <<"prefix">> => <<"http://localhost:6363">> }
