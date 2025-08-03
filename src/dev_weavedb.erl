@@ -1,5 +1,5 @@
 -module(dev_weavedb).
--export([ compute/3, init/3, snapshot/3, normalize/3, query/3 ]).
+-export([ compute/3, init/3, snapshot/3, normalize/3, query/3, start/3 ]).
 -include_lib("eunit/include/eunit.hrl").
 -include("include/hb.hrl").
 
@@ -64,9 +64,9 @@ query(_M1, M2, _Opts) ->
     {ok, Sum} = dev_weavedb_nif:query(A, B),
     {ok, #{ <<"sum">> => Sum }}.
 
-info(_, _, Opts) ->
-    ensure_started(Opts),
-    {ok, #{ <<"node">> => <<"HyperBEAM">> }}.
+start(_, _, Opts) ->
+    JSON = dev_codec_json:to(#{ <<"status">> => ensure_started(Opts)}),
+    {ok, #{ <<"content-type">> => <<"application/json">>, <<"body">> => JSON }}.
 
 %% @doc Ensure the local `weavedb@1.0' is live. If it not, start it.
 ensure_started(Opts) ->
