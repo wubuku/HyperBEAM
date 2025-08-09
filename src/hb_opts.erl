@@ -90,7 +90,8 @@ default_message() ->
             #{<<"name">> => <<"volume@1.0">>, <<"module">> => dev_volume},
             #{<<"name">> => <<"wasi@1.0">>, <<"module">> => dev_wasi},
             #{<<"name">> => <<"wasm-64@1.0">>, <<"module">> => dev_wasm},
-            #{<<"name">> => <<"weavedb@1.0">>, <<"module">> => dev_weavedb}
+            #{<<"name">> => <<"weavedb@1.0">>, <<"module">> => dev_weavedb},
+            #{<<"name">> => <<"weavedb_wal@1.0">>, <<"module">> => dev_weavedb_wal}
         ],
         %% Default execution cache control options
         cache_control => [<<"no-cache">>, <<"no-store">>],
