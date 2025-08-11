@@ -1,8 +1,7 @@
 -module(dev_weavedb_wal).
--export([snapshot/3, compute/3, init/3]).
+-export([snapshot/3, compute/3, init/3, normalize/3]).
 -include_lib("eunit/include/eunit.hrl").
 -include("include/hb.hrl").
-
 
 compute(Msg1, Msg2, Opts) ->
     case hb_ao:get([<<"body">>,<<"type">>], Msg2, Opts) of
@@ -33,3 +32,4 @@ init(Msg, _Msg2, Opts) -> {ok, hb_ao:set(Msg, #{ }, Opts)}.
 
 snapshot(_Msg1, _Msg2, _Opts) -> {ok, #{}}.
 
+normalize(Msg, _Msg2, _Opts) -> {ok, Msg}.
