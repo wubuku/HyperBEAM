@@ -1,5 +1,5 @@
 -module(dev_weavedb).
--export([ compute/3, init/3, snapshot/3, normalize/3, query/3, start/3 ]).
+-export([ compute/3, init/3, snapshot/3, normalize/3, query/3, start/3, is_started/1 ]).
 -include_lib("eunit/include/eunit.hrl").
 -include("include/hb.hrl").
 
@@ -115,7 +115,6 @@ init(Msg, _Msg2, Opts) ->
     DB = hb_ao:get([<<"process">>,<<"db">>], Msg, Opts),    
     {ok, hb_ao:set(Msg, #{ <<"db">> => DB, <<"zkhash">> => "0" }, Opts)}.
 
-
 snapshot(Msg, _Msg2, _Opts) -> {ok, Msg}.
 
 normalize(Msg, _Msg2, _Opts) -> {ok, Msg}.
@@ -128,6 +127,12 @@ query(_M1, M2, _Opts) ->
 
 start(_, _, Opts) ->
     JSON = dev_codec_json:to(#{ <<"status">> => ensure_started(Opts)}),
+    {ok, #{ <<"content-type">> => <<"application/json">>, <<"body">> => JSON }}.
+
+%% @doc Check if the weavedb server is started without attempting to start it.
+is_started(Opts) ->
+    Status = status(Opts),
+    JSON = dev_codec_json:to(#{ <<"status">> => Status}),
     {ok, #{ <<"content-type">> => <<"application/json">>, <<"body">> => JSON }}.
 
 %% @doc Ensure the local `weavedb@1.0' is live. If it not, start it.
@@ -220,18 +225,23 @@ is_weavedb_server_running(Opts) ->
 %% @doc Check if the weavedb server is running by requesting its status
 %% endpoint.
 status(Opts) ->
-    ServerPort =
-        integer_to_binary(
-            hb_opts:get(
-                weavedb_port,
-                6364,
-                Opts
-            )
-        ),
-    try hb_http:get(<<"http://localhost:", ServerPort/binary, "/status">>, Opts) of
-        {ok, Res} ->
-            ?event({weavedb_status_check, {res, Res}}),
+    ServerPort = hb_opts:get(weavedb_port, 6364, Opts),
+    Peer = <<"http://localhost:", (integer_to_binary(ServerPort))/binary>>,
+    Path = <<"/status">>,
+    Args = #{
+        peer => Peer,
+        path => Path,
+        method => <<"GET">>,
+        headers => #{},
+        body => <<>>
+    },
+    try hb_http_client:req(Args, Opts) of
+        {ok, 200, _Headers, _Body} ->
+            ?event({weavedb_status_check, {status, 200}}),
             true;
+        {ok, Status, _Headers, _Body} ->
+            ?event({weavedb_status_check, {err, Status}}),
+            false;
         Err ->
             ?event({weavedb_status_check, {err, Err}}),
             false
