@@ -5,7 +5,7 @@
 
 -define(STATUS_TIMEOUT, 100).
 
-compute(Msg1, Msg2, Opts) ->
+compute2(Msg1, Msg2, Opts) ->
     case hb_ao:get([<<"body">>,<<"Action">>], Msg2, Opts) of
         <<"Query">> ->
             Slot = hb_ao:get(<<"slot">>, Msg2, Opts),
@@ -61,7 +61,6 @@ compute(Msg1, Msg2, Opts) ->
                 not_found -> hb_ao:get(<<"reference">>, Msg2, not_found, Opts);
                 FoundRef -> FoundRef
             end,
-            
             Results = case {FromProcess, Reference} of
                 {not_found, _} ->
                     % No from-process, just return data as before
@@ -90,7 +89,6 @@ compute(Msg1, Msg2, Opts) ->
                             <<"1">> => #{
                                 <<"target">> => FromProc,
                                 <<"data">> => DataJSON,
-                                <<"action">> => <<"Reply">>,
                                 <<"x-reference">> => Ref,
                                 <<"type">> => <<"Message">>,
                                 <<"from-db">> => ID
@@ -110,6 +108,117 @@ compute(Msg1, Msg2, Opts) ->
             ZKHash = hb_ao:get([<<"body">>,<<"zkhash">>], Msg2, Opts),
             {ok, hb_ao:set(Msg1, #{ <<"db">> => ID, <<"zkhash">> => ZKHash }, Opts)}
     end.
+
+compute(Msg1, Msg2, Opts) ->
+    ActionRaw = hb_ao:get([<<"body">>, <<"Action">>], Msg2, Opts),
+    Action = case ActionRaw of
+        <<"\"Query\", \"Query\"">> -> <<"Query">>;
+        _ -> ActionRaw
+    end,
+    case Action of
+        <<"Query">> ->
+            Slot = hb_ao:get(<<"slot">>, Msg2, Opts),
+            ProcID = hb_ao:get(<<"process">>, Msg2, Opts),
+
+            {ok, AOS2 = #{ <<"body">> := Body }} =
+                dev_scheduler_formats:assignments_to_aos2(
+                    ProcID,
+                    #{
+                        Slot => Msg2
+                    },
+                    false,
+                    Opts
+                ),
+            {ok, Res} = 
+                hb_ao:resolve(
+                    #{
+                        <<"device">> => <<"relay@1.0">>,
+                        <<"content-type">> => <<"application/json">>
+                    },
+                    AOS2#{
+                        <<"path">> => <<"call">>,
+                        <<"relay-method">> => <<"POST">>,
+                        <<"relay-body">> => Body,
+                        <<"relay-path">> =>
+                            << "/weavedb/", (hb_util:bin(Slot))/binary, "?process-id=", ProcID/binary >>,
+                        <<"content-type">> => <<"application/json">>
+                    },
+                    Opts#{
+                        hashpath => ignore,
+                        cache_control => [<<"no-store">>, <<"no-cache">>]
+                    }
+                ),
+            ID = hb_ao:get(<<"db">>, Msg1, Opts),
+            ZKHash = hb_ao:get(<<"zkhash">>, Msg1, Opts),
+            
+            % Parse the JSON response to extract the data
+            ResultJSON = hb_ao:get(<<"body">>, Res, Opts),
+            Result = dev_codec_json:from(ResultJSON),
+            
+            % Extract just the data part
+            Data = case Result of
+                #{ <<"Output">> := #{ <<"data">> := D } } -> D;
+                #{ <<"data">> := D } -> D;
+                DirectData -> DirectData
+            end,
+            
+            % Check if we need to create an outbox response
+            FromProcess = case hb_ao:get([<<"body">>, <<"from-process">>], Msg2, not_found, Opts) of
+                not_found -> hb_ao:get(<<"from-process">>, Msg2, not_found, Opts);
+                FoundFrom -> FoundFrom
+            end,
+            Reference = case hb_ao:get([<<"body">>, <<"reference">>], Msg2, not_found, Opts) of
+                not_found -> hb_ao:get(<<"reference">>, Msg2, not_found, Opts);
+                FoundRef -> FoundRef
+            end,
+            Results = case {FromProcess, Reference} of
+                {not_found, _} ->
+                    % No from-process, just return data as before
+                    #{ <<"data">> => Data };
+                {_, not_found} ->
+                    % No reference, just return data as before
+                    #{ <<"data">> => Data };
+                {FromProc, Ref} ->
+                    % Both present, create outbox message as a reply
+                    % Encode the data based on its type
+                    DataJSON = case Data of
+                        List when is_list(List) -> 
+                            % For lists, encode directly
+                            jsx:encode(Data);
+                        Map when is_map(Map) ->
+                            % For maps, use dev_codec_json
+                            dev_codec_json:to(Data);
+                        _ ->
+                            % For other types, encode directly
+                            jsx:encode(Data)
+                    end,
+                    
+                    #{ 
+                        <<"data">> => Data,
+                        <<"outbox">> => #{
+                            <<"1">> => #{
+                                <<"target">> => FromProc,
+                                <<"data">> => DataJSON,
+                                <<"x-reference">> => Ref,
+                                <<"type">> => <<"Message">>,
+                                <<"from-db">> => ID
+                            }
+                        }
+                    }
+            end,
+            
+            {ok, hb_ao:set(Msg1, #{ 
+                <<"db">> => ID, 
+                <<"zkhash">> => ZKHash, 
+                <<"results">> => Results 
+            }, Opts)};
+            
+        _Other ->
+            ID = hb_ao:get(<<"db">>, Msg1, Opts),
+            ZKHash = hb_ao:get([<<"body">>,<<"zkhash">>], Msg2, Opts),
+            {ok, hb_ao:set(Msg1, #{ <<"db">> => ID, <<"zkhash">> => ZKHash }, Opts)}
+    end.
+
 
 init(Msg, _Msg2, Opts) -> 
     DB = hb_ao:get([<<"process">>,<<"db">>], Msg, Opts),    
