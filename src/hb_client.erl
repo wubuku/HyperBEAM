@@ -89,13 +89,29 @@ arweave_timestamp() ->
 upload(Msg, Opts) ->
     upload(Msg, Opts, hb_ao:get(<<"codec-device">>, Msg, <<"httpsig@1.0">>, Opts)).
 upload(Msg, Opts, <<"httpsig@1.0">>) ->
-    case hb_opts:get(bundler_httpsig, not_found, Opts) of
-        not_found ->
-            {error, no_httpsig_bundler};
-        Bundler ->
-            ?event({uploading_item, Msg}),
-            hb_http:post(Bundler, <<"/tx">>, Msg, Opts)
-    end;
+    % Cache BEFORE spawning
+    ProcID = hb_ao:get(<<"process">>, Msg, not_found, Opts),
+    Slot = hb_ao:get(<<"slot">>, Msg, not_found, Opts),
+    case {ProcID, Slot} of
+        {not_found, _} -> ok;
+        {_, not_found} -> ok;
+        {P, S} ->
+	    MsgBinary = term_to_binary(Msg),
+	    {ok, Path} = hb_cache:write(MsgBinary, Opts),
+            CacheKey = <<"bundler-msg-", (hb_util:human_id(P))/binary, "-", (hb_util:bin(S))/binary>>,
+            hb_cache:link(Path, CacheKey, Opts),
+            TestRead = hb_cache:read(CacheKey, Opts)
+    end,
+    
+    % THEN spawn for upload
+    spawn(fun() ->
+        case hb_opts:get(bundler_httpsig, not_found, Opts) of
+            not_found -> ok;
+            Bundler -> catch hb_http:post(Bundler, <<"/tx">>, Msg, Opts)
+        end
+    end),
+    {error, no_httpsig_bundler};
+
 upload(Msg, Opts, <<"ans104@1.0">>) when is_map(Msg) ->
     ?event({msg_to_convert, Msg}),
     Converted = hb_message:convert(Msg, <<"ans104@1.0">>, Opts),

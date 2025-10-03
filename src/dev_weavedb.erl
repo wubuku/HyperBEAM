@@ -1,112 +1,26 @@
 -module(dev_weavedb).
--export([ compute/3, init/3, snapshot/3, normalize/3, query/3, start/3, is_started/1 ]).
+-export([ compute/3, init/3, snapshot/3, normalize/3, query/3, start/3, is_started/1, get_message/3 ]).
 -include_lib("eunit/include/eunit.hrl").
 -include("include/hb.hrl").
 
 -define(STATUS_TIMEOUT, 100).
 
-compute2(Msg1, Msg2, Opts) ->
-    case hb_ao:get([<<"body">>,<<"Action">>], Msg2, Opts) of
-        <<"Query">> ->
-            Slot = hb_ao:get(<<"slot">>, Msg2, Opts),
-            ProcID = hb_ao:get(<<"process">>, Msg2, Opts),
-            {ok, AOS2 = #{ <<"body">> := Body }} =
-                dev_scheduler_formats:assignments_to_aos2(
-                    ProcID,
-                    #{
-                        Slot => Msg2
-                    },
-                    false,
-                    Opts
-                ),
-            {ok, Res} = 
-                hb_ao:resolve(
-                    #{
-                        <<"device">> => <<"relay@1.0">>,
-                        <<"content-type">> => <<"application/json">>
-                    },
-                    AOS2#{
-                        <<"path">> => <<"call">>,
-                        <<"relay-method">> => <<"POST">>,
-                        <<"relay-body">> => Body,
-                        <<"relay-path">> =>
-                            << "/weavedb/", (hb_util:bin(Slot))/binary, "?process-id=", ProcID/binary >>,
-                        <<"content-type">> => <<"application/json">>
-                    },
-                    Opts#{
-                        hashpath => ignore,
-                        cache_control => [<<"no-store">>, <<"no-cache">>]
-                    }
-                ),
-            ID = hb_ao:get(<<"db">>, Msg1, Opts),
-            ZKHash = hb_ao:get(<<"zkhash">>, Msg1, Opts),
-            
-            % Parse the JSON response to extract the data
-            ResultJSON = hb_ao:get(<<"body">>, Res, Opts),
-            Result = dev_codec_json:from(ResultJSON),
-            
-            % Extract just the data part
-            Data = case Result of
-                #{ <<"Output">> := #{ <<"data">> := D } } -> D;
-                #{ <<"data">> := D } -> D;
-                DirectData -> DirectData
-            end,
-            
-            % Check if we need to create an outbox response
-            FromProcess = case hb_ao:get([<<"body">>, <<"from-process">>], Msg2, not_found, Opts) of
-                not_found -> hb_ao:get(<<"from-process">>, Msg2, not_found, Opts);
-                FoundFrom -> FoundFrom
-            end,
-            Reference = case hb_ao:get([<<"body">>, <<"reference">>], Msg2, not_found, Opts) of
-                not_found -> hb_ao:get(<<"reference">>, Msg2, not_found, Opts);
-                FoundRef -> FoundRef
-            end,
-            Results = case {FromProcess, Reference} of
-                {not_found, _} ->
-                    % No from-process, just return data as before
-                    #{ <<"data">> => Data };
-                {_, not_found} ->
-                    % No reference, just return data as before
-                    #{ <<"data">> => Data };
-                {FromProc, Ref} ->
-                    % Both present, create outbox message as a reply
-                    % Encode the data based on its type
-                    DataJSON = case Data of
-                        List when is_list(List) -> 
-                            % For lists, encode directly
-                            jsx:encode(Data);
-                        Map when is_map(Map) ->
-                            % For maps, use dev_codec_json
-                            dev_codec_json:to(Data);
-                        _ ->
-                            % For other types, encode directly
-                            jsx:encode(Data)
-                    end,
-                    
-                    #{ 
-                        <<"data">> => Data,
-                        <<"outbox">> => #{
-                            <<"1">> => #{
-                                <<"target">> => FromProc,
-                                <<"data">> => DataJSON,
-                                <<"x-reference">> => Ref,
-                                <<"type">> => <<"Message">>,
-                                <<"from-db">> => ID
-                            }
-                        }
-                    }
-            end,
-            
-            {ok, hb_ao:set(Msg1, #{ 
-                <<"db">> => ID, 
-                <<"zkhash">> => ZKHash, 
-                <<"results">> => Results 
-            }, Opts)};
-            
-        _Other ->
-            ID = hb_ao:get(<<"db">>, Msg1, Opts),
-            ZKHash = hb_ao:get([<<"body">>,<<"zkhash">>], Msg2, Opts),
-            {ok, hb_ao:set(Msg1, #{ <<"db">> => ID, <<"zkhash">> => ZKHash }, Opts)}
+get_message(Msg1, Msg2, Opts) ->
+    ProcID = hb_ao:get(<<"pid">>, Msg2, Opts),
+    Slot = hb_ao:get(<<"slot">>, Msg2, Opts),
+    
+    CacheKey = <<"bundler-msg-", (hb_util:human_id(ProcID))/binary, "-", (hb_util:bin(Slot))/binary>>,
+    io:format("GET_MSG: Looking for key: ~p~n", [CacheKey]),
+    case hb_cache:read(CacheKey, Opts) of
+        {ok, BundlerMsgBinary} when is_binary(BundlerMsgBinary) -> 
+            io:format("FOUND IN BUNDLER CACHE~n"),
+            % Deserialize the term
+            BundlerMsg = binary_to_term(BundlerMsgBinary),
+            io:format("Msg: ~p~n", [BundlerMsg]),
+            {ok, BundlerMsg};
+        not_found -> 
+            io:format("NOT FOUND IN BUNDLER CACHE, using scheduler cache~n"),
+            dev_scheduler_cache:read(ProcID, Slot, Opts)
     end.
 
 compute(Msg1, Msg2, Opts) ->
@@ -206,7 +120,6 @@ compute(Msg1, Msg2, Opts) ->
                         }
                     }
             end,
-            
             {ok, hb_ao:set(Msg1, #{ 
                 <<"db">> => ID, 
                 <<"zkhash">> => ZKHash, 
