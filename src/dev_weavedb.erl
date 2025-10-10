@@ -125,7 +125,41 @@ compute(Msg1, Msg2, Opts) ->
                 <<"zkhash">> => ZKHash, 
                 <<"results">> => Results 
             }, Opts)};
+        <<"Commit">> ->
+            ID = hb_ao:get(<<"db">>, Msg1, Opts),
+            ZKHash = hb_ao:get([<<"body">>,<<"zkhash">>], Msg2, Opts),
+            Slot = hb_ao:get(<<"slot">>, Msg2, Opts),
+            ProcID = hb_ao:get(<<"process">>, Msg2, Opts),
+            Body = hb_ao:get(<<"body">>, Msg2, Opts),
+	    {ok, Res} = 
+                hb_ao:resolve(
+                    #{
+                        <<"device">> => <<"relay@1.0">>,
+                        <<"content-type">> => <<"application/json">>
+                    },
+		    Msg2#{
+                        <<"path">> => <<"call">>,
+                        <<"relay-method">> => <<"POST">>,
+                        <<"relay-path">> =>
+                            << "/weavedb/", (hb_util:bin(Slot))/binary, "?process-id=", ProcID/binary >>,
+                        <<"content-type">> => <<"application/json">>
+                    },
+                    Opts#{
+                        hashpath => ignore,
+                        cache_control => [<<"no-store">>, <<"no-cache">>]
+                    }
+                ),
+            % Parse the JSON response to extract the data
+            ResultJSON = hb_ao:get(<<"body">>, Res, Opts),
+            Result = dev_codec_json:from(ResultJSON),
             
+            % Extract just the data part
+            Data = case Result of
+                #{ <<"Output">> := #{ <<"data">> := D } } -> D;
+                #{ <<"data">> := D } -> D;
+                DirectData -> DirectData
+            end,
+            {ok, hb_ao:set(Msg1, #{ <<"db">> => ID, <<"zkhash">> => ZKHash, <<"results">> => #{ <<"data">> => dev_codec_json:to(Data) }}, Opts)};
         _Other ->
             ID = hb_ao:get(<<"db">>, Msg1, Opts),
             ZKHash = hb_ao:get([<<"body">>,<<"zkhash">>], Msg2, Opts),
