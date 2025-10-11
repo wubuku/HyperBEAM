@@ -66,34 +66,25 @@ get_result(Res, ID, Msg2, Opts) ->
 		    FoundRef -> FoundRef
 		end,
     case {FromProcess, Reference} of
-	{not_found, _} -> #{ <<"data">> => jsx:encode(Data) };
-	{_, not_found} ->  #{ <<"data">> => jsx:encode(Data) };
+	{not_found, _} -> #{ <<"data">> => Data };
+	{_, not_found} ->  #{ <<"data">> => Data };
 	{FromProc, Ref} ->
-	    DataJSON = case Data of
-			   List when is_list(List) -> jsx:encode(Data);
-			   Map when is_map(Map) -> jsx:encode(Data);
-			   _ -> jsx:encode(Data)
-		       end,
 	    Outbox = #{
 		       <<"target">> => FromProc,
-		       <<"data">> => DataJSON,
+		       <<"data">> => Data,
 		       <<"x-reference">> => Ref,
 		       <<"type">> => <<"Message">>,
 		       <<"from-db">> => ID
 		      },
 
 	    #{ 
-	       <<"data">> => jsx:encode(Data),
+	       <<"data">> => Data,
 	       <<"outbox">> => #{ <<"1">> => Outbox }
 	     }
     end.
 
 compute(Msg1, Msg2, Opts) ->
-    ActionRaw = hb_ao:get([<<"body">>, <<"Action">>], Msg2, Opts),
-    Action = case ActionRaw of
-		 <<"\"Query\", \"Query\"">> -> <<"Query">>;
-		 _ -> ActionRaw
-	     end,
+    Action = hb_ao:get([<<"body">>, <<"Action">>], Msg2, Opts),
     Slot = hb_ao:get(<<"slot">>, Msg2, Opts),
     ProcID = hb_ao:get(<<"process">>, Msg2, Opts),
     ID = hb_ao:get(<<"db">>, Msg1, Opts),
@@ -102,9 +93,7 @@ compute(Msg1, Msg2, Opts) ->
             {ok, AOS2 = #{ <<"body">> := Body }} =
                 dev_scheduler_formats:assignments_to_aos2(
 		  ProcID,
-		  #{
-		    Slot => Msg2
-		   },
+		  #{ Slot => Msg2 },
 		  false,
 		  Opts
 		 ),
@@ -125,7 +114,6 @@ compute(Msg1, Msg2, Opts) ->
 	    Results = get_result(Res, ID, Msg2, Opts),
 	    {ok, hb_ao:set(Msg1, #{ <<"results">> => Results}, Opts)}
     end.
-
 
 init(Msg, _Msg2, Opts) -> 
     DB = hb_ao:get([<<"process">>,<<"db">>], Msg, Opts),    
