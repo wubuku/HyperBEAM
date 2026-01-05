@@ -656,10 +656,19 @@ get_hint(Str, Opts) when is_binary(Str) ->
         true ->
             case binary:split(Str, <<"?">>, [global]) of
                 [_, QS] ->
-                    QueryMap = maps:from_list(uri_string:dissect_query(QS)),
-                    case maps:get(<<"hint">>, QueryMap, not_found) of
-                        not_found -> not_found;
-                        Hint -> {ok, Hint}
+                    try
+                        QueryMap = maps:from_list(uri_string:dissect_query(QS)),
+                        case maps:get(<<"hint">>, QueryMap, not_found) of
+                            not_found -> not_found;
+                            Hint -> {ok, Hint}
+                        end
+                    catch
+                        error:badarg -> 
+                            io:format("Invalid query string: ~p~n", [QS]),
+                            not_found;
+                        _:_ -> 
+                            io:format("Error parsing query string: ~p~n", [QS]),
+                            not_found
                     end;
                 _ -> not_found
             end;

@@ -89,7 +89,9 @@ default_message() ->
             #{<<"name">> => <<"test-device@1.0">>, <<"module">> => dev_test},
             #{<<"name">> => <<"volume@1.0">>, <<"module">> => dev_volume},
             #{<<"name">> => <<"wasi@1.0">>, <<"module">> => dev_wasi},
-            #{<<"name">> => <<"wasm-64@1.0">>, <<"module">> => dev_wasm}
+            #{<<"name">> => <<"wasm-64@1.0">>, <<"module">> => dev_wasm},
+            #{<<"name">> => <<"weavedb@1.0">>, <<"module">> => dev_weavedb},
+            #{<<"name">> => <<"weavedb-wal@1.0">>, <<"module">> => dev_weavedb_wal}
         ],
         %% Default execution cache control options
         cache_control => [<<"no-cache">>, <<"no-store">>],
@@ -135,6 +137,11 @@ default_message() ->
         debug_show_priv => false,
         snp_trusted => [],
         routes => [
+            #{
+                % Routes for the weavedb device to use a rollup node, if requested.
+                <<"template">> => <<"/weavedb/.*">>,
+                <<"node">> => #{ <<"prefix">> => <<"http://localhost:6366">> }
+            },
             #{
                 % Routes for the genesis-wasm device to use a local CU, if requested.
                 <<"template">> => <<"/result/.*">>,
