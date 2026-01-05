@@ -1298,7 +1298,7 @@ public void handleDevice(Device device) {
 }
 ```
 
-### 9.5 记录更新语法详解
+### 9.6 记录更新语法详解
 
 #### 记录更新：`State#state{}`
 

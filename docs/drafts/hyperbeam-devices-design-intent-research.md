@@ -15,10 +15,10 @@ HyperBEAM 是 AO-Core 协议的一个 Erlang 实现，是一个去中心化的�
 通过对HyperBEAM代码库的深入分析，我们验证了研究报告的结论：
 
 #### 预加载设备统计
-代码库中`src/hb_opts.erl`的`preloaded_devices`配置包含42个设备，主要分类如下：
-- **技术基础设施**（38个）：编解码器（json、flat、httpsig等）、执行引擎（wasm64、lua）、调度器、缓存系统、支付系统等
+代码库中`src/hb_opts.erl`的`preloaded_devices`配置包含43个设备，主要分类如下：
+- **技术基础设施**（39个）：编解码器（json、flat、httpsig等）、执行引擎（wasm64、lua）、调度器、缓存系统、支付系统等
 - **共识与安全**（3个）：PoDA、SNP（TEE证明）、多重签名
-- **自定义示例**（1个）：dev_mydev.erl（教程用简单设备）
+- **测试/示例**（1个）：`test-device@1.0` (dev_test.erl)
 
 #### 设备接口标准化
 所有设备都遵循统一的`arity 3`函数签名：
@@ -54,7 +54,7 @@ AO-Core 的三个核心组件：
 ### 2. Devices 的设计层次
 
 #### 技术基础设施层
-HyperBEAM 目前预加载了 25 个设备，主要包括技术基础设施：
+HyperBEAM 目前预加载了 43 个设备，主要包括技术基础设施：
 
 - `~wasm64@1.0`：WebAssembly 执行引擎
 - `~lua@5.3a`：Lua 脚本执行引擎
@@ -69,7 +69,7 @@ Devices 的设计远不止技术基础设施，可以扩展到更广泛的应用
 
 Devices 被设计为封装完整应用逻辑的模块化组件：
 
-> "HyperBeam supports a number of different devices, each of which enable different services to be offered by the node. There are presently 42 different devices included in the `preloaded_devices` of a HyperBEAM node, although it is possible to add and remove devices as necessary."
+> "HyperBeam supports a number of different devices, each of which enable different services to be offered by the node. There are presently 43 different devices included in the `preloaded_devices` of a HyperBEAM node, although it is possible to add and remove devices as necessary."
 
 **来源：**[HyperBEAM README](https://github.com/permaweb/HyperBEAM/blob/main/README.md)
 

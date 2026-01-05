@@ -660,12 +660,6 @@ class EventSourcedAPI {
             console.log(`Health check: http://localhost:${port}/health`);
         });
     }
-
-    start(port = 3000) {
-        this.app.listen(port, () => {
-            console.log(`Business logic server running on port ${port}`);
-        });
-    }
 }
 
 // 启动服务
@@ -684,6 +678,7 @@ from typing import Dict, Any, List
 import time
 import uuid
 import json
+import os
 
 app = FastAPI(title="Event-Sourced RESTful API")
 
@@ -868,16 +863,6 @@ def rebuild_state():
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
-@app.get("/api/events")
-async def get_events():
-    """获取事件历史"""
-    return {"events": [event.dict() for event in events]}
-
-@app.get("/api/state")
-async def get_state():
-    """获取当前状态"""
-    return {"state": state}
 
 @app.on_event("startup")
 async def startup_event():

@@ -308,27 +308,43 @@ Res =
 2. **签名与发布**：使用创建者的钱包对这个Map进行签名，形成不可篡改的消息。
 3. **提交给调度器**：将这个签好名的"进程消息"作为内容，再包装成普通的调度请求，发送给它自己指定的SU。
 
-当SU收到这个调度请求时，它会识别出消息体中包含的 `<<"type">> => <<"Process">>` 字段。
+当SU的 `scheduler@1.0` 设备收到调度请求时，它会识别出消息体中包含的 `<<"type">> => <<"Process">>` 字段，并将其作为创世消息进行特殊处理。
 
 **代码证据**：
-`src/dev_scheduler_server.erl` 的 `do_assign/3` 函数中处理进程创建的核心逻辑如下：
+`src/dev_scheduler.erl` 的 `do_post_schedule/4` 函数是处理 `POST /schedule` 请求的核心，其中包含了对创世消息的判断逻辑：
 
 ```erlang
-% src/dev_scheduler_server.erl -> do_assign/3
-case {Verified, hb_ao:get(<<"type">>, Msg2, Opts)} of
-    ...
-    % 当调度器收到一个类型为 "Process" 的消息时
-    {true, <<"Process">>} ->
-        % 1. 将这个进程定义写入本地缓存
-        {ok, _} = hb_cache:write(Msg2, Opts),
-        % 2. 异步上传到 Arweave 以实现永久存储
-        spawn(fun() -> hb_client:upload(Msg2, Opts) end),
-        ?event(
-            {registering_new_process, ...}
-        ),
-        % 3. 将其作为第一个消息（slot 0）安排进自己的调度队列
-        {ok, dev_scheduler_server:schedule(PID, Msg2)};
+% src/dev_scheduler.erl -> do_post_schedule/4
+do_post_schedule(ProcID, PID, Msg2, Opts) ->
+    % ... 消息验证 ...
+    Verified =
+        case hb_opts:get(verify_assignments, true, Opts) of
+            true ->
+                hb_message:verify(Msg2, signers);
+            false -> true
+        end,
+    
+    % 根据消息类型分别处理
+    case {Verified, hb_ao:get(<<"type">>, Msg2, Opts)} of
+        {false, _} ->
+            {error, #{ <<"status">> => 400, ... }};
+
+        % 当调度器收到一个类型为 "Process" 的消息时
+        {true, <<"Process">>} ->
+            % 1. 将这个进程定义写入本地缓存
+            {ok, _} = hb_cache:write(Msg2, Opts),
+            % 2. 异步上传到 Arweave 以实现永久存储
+            spawn(fun() -> hb_client:upload(Msg2, Opts) end),
+            ?event({registering_new_process, ...}),
+            % 3. 将其安排进该进程专属的调度服务进程
+            {ok, dev_scheduler_server:schedule(PID, Msg2)};
+        
+        {true, _} ->
+            % 对于普通消息，直接安排进调度队列
+            {ok, dev_scheduler_server:schedule(PID, Msg2)}
+    end.
 ```
+这段代码显示，当一个经过验证的消息被识别为`<<"Process">>`类型时，`dev_scheduler`会先将其写入缓存并触发上传至Arweave，然后才调用`dev_scheduler_server:schedule/2`，将其发送给对应进程的、独立的调度服务进程（`dev_scheduler_server`）进行最终的slot分配。
 
 ### 5.2 进程定义的最小必须字段
 
