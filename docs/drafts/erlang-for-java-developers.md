@@ -101,6 +101,72 @@ bad_function(X) ->
 ```
 **编译错误会是**: `syntax error before: 'B'`，因为编译器认为 `bad_function` 在 `A = X + 1.` 之后已经结束，`B` 的出现不合法。
 
+#### **0.2.1 分号 (;) 的角色：OR 逻辑与选择分支**
+
+Java 开发者常常困惑于 Erlang 中的分号，因为它不像 Java 中的分号那样只是简单的语句终止符。Erlang 的分号遵循**英文标点符号的逻辑**：**逗号是"且"（AND），分号是"或"（OR）**。
+
+**分号的三大角色：**
+
+**角色A：函数子句分隔符** - 分号用于分隔同名函数的不同子句（pattern matching）：
+
+```erlang
+% Java 开发者可能这样想：为什么不直接用 if-else？
+% Erlang 的方式更声明式：直接声明所有可能的模式
+
+max(A, B) when A > B -> A;    % 第一个子句：A > B 时返回 A
+max(_, B) -> B.               % 最后一个子句：其他情况返回 B（用句号结束）
+```
+
+**角色B：Guard 中的 OR 逻辑** - 在守卫子句中，分号表示至少一个条件为真即可：
+
+```erlang
+% 在范围检查中
+in_valid_range(X) when X >= 0, X =< 100 -> true;  % X >= 0 AND X =< 100
+in_valid_range(_) -> false.
+
+% 在类型检查中：整数 OR 浮点数
+is_number(X) when is_integer(X); is_float(X) -> true;
+is_number(_) -> false.
+```
+
+**角色C：条件表达式分支分隔符** - 在 `if` 和 `case` 表达式中，分号分隔不同的分支：
+
+```erlang
+is_greater_than(X, Y) ->
+    if
+        X > Y -> true;          % 分号分隔分支
+        true -> false           % 最后无分号
+    end.
+```
+
+#### **0.2.2 分隔符的逻辑思维：AND vs OR**
+
+| 分隔符 | 逻辑含义 | Java 类比 | 使用场景 |
+|--------|----------|-----------|----------|
+| `,` (逗号) | **AND** | `&&` 或连续语句 | 顺序执行、Guard条件组合 |
+| `;` (分号) | **OR** | `\|\|` 或 `else if` | 函数子句选择、分支分隔 |
+| `.` (句号) | **结束** | `}` 或方法结束 | 函数定义终止 |
+
+#### **0.2.3 快速参考卡**
+
+```
+函数定义模板：
+───────────────────────────────
+func(pattern1) when guard1, guard2 ->
+    expr1, expr2, expr3;        ← 逗号分隔表达式序列
+                                ← 分号分隔子句
+func(pattern2) when guard3; guard4 ->
+    expr4;
+func(patternN) when guardN ->
+    exprN.                      ← 句号结束函数
+
+Guard 逻辑：
+───────────────────────────────
+when A, B, C        →  (A AND B AND C)
+when A; B; C        →  (A OR B OR C)
+when (A, B); (C, D) →  ((A AND B) OR (C AND D))
+```
+
 ### 0.3 代码块也是表达式
 
 在 Java 中，`if`、`switch`、`try-catch` 都是语句块。但在 Erlang 中，`if`、`case`、`receive` 块本身就是**表达式**，它们一定会返回一个值。
@@ -201,6 +267,122 @@ generate_id() ->
 | `func/1`, `func/2` | 方法重载 (Method Overloading) | Erlang 根据参数**数量**（元数）区分函数，Java 根据参数**类型和数量**。|
 
 现在，你已经掌握了 Erlang 的骨架。接下来，我们开始填充血肉——数据类型。
+
+### 0.5 end 关键字：块表达式的“右括号”
+
+对于 Java 开发者来说，`end` 关键字是 Erlang 最容易困惑的语法元素之一。它不像 Java 的花括号 `{}` 那样直观，但它遵循着严格的配对规则。
+
+**`end` 的核心角色：闭合块状结构表达式**
+
+`end` 关键字用来**终止块状结构表达式**。它标志着某个表达式的结束。关键特点是：`end` 与特定的启动关键字配对使用，不同的表达式类型有不同的搭配。
+
+**`end` 的六大使用场景：**
+
+**1. `case ... of ... end`** - 条件分支匹配表达式：
+```erlang
+classify(X) ->
+    case X of
+        N when N < 0 -> negative;   % 分号分隔分支
+        N when N > 0 -> positive;   % 分号分隔分支
+        _ -> zero                   % 最后一个，无分号
+    end.                            % ← end 终止 case 表达式
+```
+
+**2. `if ... end`** - Guard 风格的条件判断表达式：
+```erlang
+is_greater_than(X, Y) ->
+    if
+        X > Y -> true;      % 分号分隔
+        true -> false       % 无分号（最后一个）
+    end.                    % ← end 终止 if 表达式
+```
+
+**3. `receive ... end`** - 消息接收表达式：
+```erlang
+wait_for_message() ->
+    receive
+        {msg, N} when N > 0 -> process_positive(N);   % 分号分隔
+        {msg, N} -> process_other(N)                  % 无分号
+    end.                    % ← end 终止 receive 表达式
+```
+
+**4. `fun() -> ... end`** - 匿名函数定义：
+```erlang
+Square = fun(X) -> X * X end.       % ← end 终止 fun 表达式
+
+%% 多行匿名函数
+Filter = fun(X) when X > 0 ->
+    positive;
+(_) ->
+    negative
+end.                        % ← end 终止 fun 表达式
+```
+
+**5. `try ... of ... catch ... end`** - 异常处理表达式：
+```erlang
+safe_divide(A, B) ->
+    try
+        A / B
+    of
+        Result -> {ok, Result}
+    catch
+        error:Error -> {exception, Error}
+    end.                       % ← end 终止整个 try 表达式
+```
+
+**6. `begin ... end`** - 块表达式（较少使用）：
+```erlang
+%% 在只允许单个表达式的位置放多个表达式
+[begin X = N*2, X+1 end || N <- [1,2,3]].
+```
+
+**`end` 与其他标点符号的搭配：**
+
+| 情境 | end 之后 | 说明 |
+| :-- | :-- | :-- |
+| `case ... end,` 在函数体中 | `,` (逗号) | 表示还有后续表达式要执行 |
+| `if ... end;` 在函数子句中 | `;` (分号) | 表示还有其他函数子句 |
+| `fun() -> ... end.` 在函数定义末尾 | `.` (句号) | 表示整个函数定义结束 |
+| `receive ... end` 在函数体中 | `,` 或 `;` | 取决于外层上下文 |
+
+**关键区分：`end` vs 函数定义的句号**
+
+```erlang
+%% ❌ 错误：函数定义不用 end 终止，用句号
+func(X) -> X end.          % 语法错误
+
+%% ✓ 正确：函数定义的结尾是句号
+func(X) -> X.
+
+%% ✓ 正确：但如果函数内有 case，case 要用 end
+func(X) ->
+    case X of
+        1 -> one;
+        _ -> other
+    end.                   % case 用 end，整个函数用句号
+```
+
+**快速参考卡：**
+
+```
+end 的配对关系：
+─────────────────────────────────
+case ... of ... end        块状条件选择
+if ... end                 Guard 风格条件
+receive ... end            消息接收
+receive ... after ... end  消息接收+超时
+try ... catch ... end      异常处理
+fun ... end                匿名函数
+begin ... end              块表达式（罕见）
+
+end 之后的标点：
+─────────────────────────────────
+,  表示还有表达式在后面
+;  表示还有函数子句或条件分支在后面
+.  表示整个函数/声明结束
+```
+
+**核心记忆法：** 将 Erlang 语法想象为**嵌套的括号结构**：`end` 就是 `case/if/receive/fun/try/begin` 的"右括号"，句号 `.` 是整个函数/模块声明的"右括号"。
 
 ## Day 1: 基础数据类型 (Primitives) - 新的思维模式
 
@@ -566,6 +748,139 @@ factorial(N) when N > 0 -> % 只有当 N 是正数时，这个子句才会被选
 % 如果调用 factorial(-1)，前两个子句都无法匹配，程序会因 function_clause 错误而崩溃
 % 这通常是期望的行为（任其崩溃），因为负数的阶乘是无定义的。
 ```
+
+#### **3.2.1 Guard 的完整解析：执行原理与限制**
+
+Guard（守卫/守护条件）是 Erlang 中用来**增强模式匹配表达能力**的构造。它是附加在函数头部的条件测试，用关键字 `when` 引入。
+
+**为什么需要 Guard？**
+
+不使用 Guard 的问题演示：
+
+```erlang
+%% 不用Guard：需要写很多子句（极其不实用！）
+old_enough(16) -> true;
+old_enough(17) -> true;
+old_enough(18) -> true;
+old_enough(19) -> true;
+...
+old_enough(_) -> false.
+```
+
+使用 Guard 的优雅解决方案：
+
+```erlang
+%% 用Guard：简洁清晰
+old_enough(Age) when Age >= 16 -> true;
+old_enough(_) -> false.
+```
+
+Guard 解决了**模式匹配无法表达的两类问题**：
+1. **值的范围**：模式匹配只能检查结构，不能检查数值范围
+2. **条件逻辑**：模式匹配不能表达复杂的条件判断
+
+**Guard 的执行原理：**
+
+1. 首先**模式匹配**函数参数
+2. 如果模式匹配成功，计算 Guard 表达式
+3. Guard 返回 `true` → 执行该子句的 Body
+4. Guard 返回 `false` 或抛异常 → 尝试下一个子句
+
+```erlang
+right_age(Age) when Age >= 16, Age =< 104 ->
+    "You can drive";           % 只有Guard为真时执行
+right_age(_) ->
+    "You cannot drive".        % Guard失败时执行
+```
+
+**关键规则：**
+- Guard 表达式必须返回 `true` 才能成功
+- Guard 返回 `false` 或抛出异常都会导致 Guard 失败
+- 失败后自动尝试下一个子句
+
+**Guard 中允许的操作：**
+
+| 类别 | 允许的操作 |
+| :-- | :-- |
+| **比较** | `>`, `<`, `>=`, `=<`, `==`, `=:=`, `/=`, `=/=` |
+| **类型检查** | `is_integer/1`, `is_atom/1`, `is_list/1`, `is_map/1`, `is_tuple/1`, `is_binary/1` |
+| **算术** | `+`, `-`, `*`, `div`, `rem` |
+| **逻辑** | `,` (AND), `;` (OR), `andalso`, `orelse` |
+| **Map操作** | `is_map/1`, `is_map_key/2`, `map_get/2`, `map_size/1` |
+
+**严格限制：**
+- ❌ **不能**调用用户定义的函数
+- ❌ **不能**调用有副作用的函数（如 I/O、发送消息）
+- ✓ **只能**调用预定义的内置函数（BIF）
+
+**为什么这么严格？** 因为 Guard 由调度器评估，不应该产生副作用或不可预测的行为，否则会破坏 Erlang 的并发模型。
+
+**Guard 在不同上下文中的应用：**
+
+**1. Case 表达式**
+```erlang
+classify(X) ->
+    case X of
+        N when N < 0 -> negative;
+        N when N > 0 -> positive;
+        _ -> zero
+    end.
+```
+
+**2. If 表达式**
+```erlang
+is_greater_than(X, Y) ->
+    if
+        X > Y -> true;
+        true -> false
+    end.
+```
+
+**3. Receive 消息接收**
+```erlang
+loop(State) ->
+    receive
+        {msg, N} when N > 0 -> process_positive(N);
+        {msg, N} when N =< 0 -> process_non_positive(N)
+    end.
+```
+
+**常见 Guard 使用案例：**
+
+```erlang
+%% 1. 年龄验证
+is_adult(Age) when is_integer(Age), Age >= 18 ->
+    true;
+is_adult(_) ->
+    false.
+
+%% 2. 范围检查（两条件 AND）
+in_valid_range(X) when X >= 0, X =< 100 ->
+    valid;
+in_valid_range(_) ->
+    invalid.
+
+%% 3. 类型检查（多个 OR）
+is_number(X) when is_integer(X); is_float(X) ->
+    true;
+is_number(_) ->
+    false.
+
+%% 4. 复杂条件（混合）
+process(X) when is_integer(X), X > 0; is_atom(X) ->
+    ok;
+process(_) ->
+    error.
+```
+
+**Guard vs andalso/orelse 的对比：**
+
+| 特性 | Guard 逗号/分号 | andalso/orelse |
+| :-- | :-- | :-- |
+| **短路** | 不完全短路 | 完全短路 |
+| **异常处理** | 异常被捕获，另一条路径继续评估 | 异常导致整体失败 |
+| **嵌套** | 限制：(A; B), C 无效 | 支持：(A orelse B) andalso C 有效 |
+| **场景** | Guard 中使用 | 普通代码中使用 |
 
 ### 3.3 终极武器：函数头中的模式匹配 + 守卫
 
