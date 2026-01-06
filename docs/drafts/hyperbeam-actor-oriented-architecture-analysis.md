@@ -47,18 +47,65 @@ Slots are a fundamental concept in the `~scheduler@1.0` device, providing a stru
 - **维护一致性**：通过 hash chain 链接 assignments
 
 #### 技术实现
-```erlang
-% 每个进程有独立的调度器服务器
-hb_name:register({dev_scheduler, ProcID}),
 
-% Slot 分配逻辑
-NextSlot = maps:get(current, State) + 1,
-Assignment = hb_message:commit(#{
-    <<"process">> => hb_util:id(maps:get(id, State)),
-    <<"slot">> => NextSlot,
-    <<"body">> => Message
-}, Wallet)
+```erlang
+% dev_scheduler_server.erl - 调度器服务器启动
+start(ProcID, Opts) ->
+    spawn_link(
+        fun() ->
+            hb_name:register({dev_scheduler, ProcID}),
+            {CurrentSlot, HashChain} =
+                case dev_scheduler_cache:latest(ProcID, Opts) of
+                    not_found -> {-1, <<>>};
+                    {Slot, Chain} -> {Slot, Chain}
+                end,
+            server(#{
+                id => ProcID,
+                current => CurrentSlot,
+                wallet => hb_opts:get(priv_wallet, hb:wallet(), Opts),
+                hash_chain => HashChain,
+                opts => Opts
+            })
+        end
+    ).
+
+% Slot 分配逻辑（do_assign函数片段）
+do_assign(State, Message, ReplyPID) ->
+    HashChain = next_hashchain(maps:get(hash_chain, State), Message),
+    NextSlot = maps:get(current, State) + 1,
+    {Timestamp, Height, Hash} = ar_timestamp:get(),
+    Assignment = hb_message:commit(#{
+        <<"data-protocol">> => <<"ao">>,
+        <<"variant">> => <<"ao.N.1">>,
+        <<"process">> => hb_util:id(maps:get(id, State)),
+        <<"epoch">> => <<"0">>,
+        <<"slot">> => NextSlot,
+        <<"block-height">> => Height,
+        <<"block-hash">> => hb_util:human_id(Hash),
+        <<"block-timestamp">> => Timestamp,
+        <<"timestamp">> => erlang:system_time(millisecond),
+        <<"hash-chain">> => hb_util:id(HashChain),
+        <<"body">> => Message
+    }, maps:get(wallet, State)),
+    % 异步写入缓存和上传到Arweave
+    spawn(fun() ->
+        dev_scheduler_cache:write(Assignment, maps:get(opts, State)),
+        hb_client:upload(Assignment, maps:get(opts, State))
+    end),
+    State#{current := NextSlot, hash_chain := HashChain}.
 ```
+
+**并发控制机制**：
+```erlang
+% dev_process_worker.erl - 进程级并发隔离
+process_to_group_name(Msg1, Opts) ->
+    Initialized = dev_process:ensure_process_key(Msg1, Opts),
+    ProcMsg = hb_ao:get(<<"process">>, Initialized, Opts#{ hashpath => ignore }),
+    ID = hb_message:id(ProcMsg, all),
+    hb_util:human_id(ID).  % 返回进程ID作为并发组标识
+```
+
+每个进程的消息处理都被分配到以进程ID命名的并发组，确保相同进程的执行串行化，不同进程可以并行执行。
 
 ### 4. 与区块链架构的对比
 
@@ -81,17 +128,33 @@ Assignment = hb_message:commit(#{
 6. **状态更新** → 更新进程状态
 
 #### 关键数据结构
+
+**Assignment（任务分配）结构**：
 ```erlang
 Assignment = #{
-    <<"process">> => ProcessID,      % 进程ID
-    <<"slot">> => SlotNumber,        % Slot编号（进程内唯一）
-    <<"epoch">> => <<"0">>,          % 纪元
-    <<"block-height">> => Height,    % 区块高度
-    <<"timestamp">> => Timestamp,    % 时间戳
-    <<"hash-chain">> => HashChain,   % 哈希链
-    <<"body">> => Message            % 原始消息
+    <<"data-protocol">> => <<"ao">>,                    % 协议标识
+    <<"variant">> => <<"ao.N.1">>,                      % 协议版本
+    <<"process">> => ProcessID,                         % 目标进程ID
+    <<"epoch">> => <<"0">>,                             % 纪元（预留字段）
+    <<"slot">> => SlotNumber,                           % Slot编号（从0开始递增）
+    <<"block-height">> => ArweaveBlockHeight,           % Arweave区块高度
+    <<"block-hash">> => ArweaveBlockHash,               % Arweave区块哈希
+    <<"block-timestamp">> => ArweaveTimestamp,          % Arweave时间戳
+    <<"timestamp">> => SystemTimestamp,                 % SU本地时间戳（毫秒）
+    <<"hash-chain">> => HashChainID,                    % 哈希链标识（用于验证顺序）
+    <<"body">> => Message                               % 原始消息内容
 }
 ```
+
+**Hash Chain机制**：
+```erlang
+% next_hashchain函数 - 生成哈希链的下一个元素
+next_hashchain(PreviousHash, Message) ->
+    MessageID = hb_message:id(Message, all),
+    crypto:hash(sha256, <<PreviousHash/binary, MessageID/binary>>).
+```
+
+Hash Chain通过将前一个哈希值与当前消息ID连接后进行SHA256哈希，确保消息顺序的不可篡改性。
 
 #### API 接口
 ```http
@@ -146,6 +209,115 @@ HyperBEAM 的 Actor-Oriented 架构通过 **Slots** 机制巧妙地解决了去�
 
 这种设计实现了区块链式确定性与传统分布式系统并发性的完美融合，是 AO 生态系统的核心创新。
 
+## 8. 最新实现细节补充
+
+### 8.1 调度模式选择
+
+HyperBEAM 支持多种调度模式，以适应不同的性能和可靠性需求：
+
+```erlang
+% 调度模式配置
+case hb_opts:get(scheduling_mode, sync, maps:get(opts, State)) of
+    aggressive ->
+        % 激进模式：立即返回，异步处理
+        spawn(AssignFun);
+    sync ->
+        % 同步模式：等待处理完成
+        AssignFun();
+    disabled ->
+        % 禁用模式：拒绝调度请求
+        throw({scheduling_disabled_on_node, {requested_for, ProcID}})
+end
+```
+
+**调度确认机制**：
+```erlang
+maybe_inform_recipient(Mode, ReplyPID, Message, Assignment, State) ->
+    case hb_opts:get(scheduling_mode, remote_confirmation, maps:get(opts, State)) of
+        Mode ->
+            % 根据模式发送确认消息
+            ReplyPID ! {scheduled, Message, Assignment};
+        _ -> ok
+    end.
+```
+
+支持三种确认级别：`aggressive`、`local_confirmation`、`remote_confirmation`。
+
+### 8.2 预取和缓存优化
+
+调度器实现了高效的预取机制：
+
+```erlang
+% dev_scheduler.erl - 预取逻辑
+check_lookahead_and_local_cache(Msg1, ProcID, TargetSlot, Opts) ->
+    case dev_scheduler_cache:read(ProcID, TargetSlot, Opts) of
+        {ok, Assignment} ->
+            % 缓存命中，直接返回
+            {ok, undefined, Assignment};
+        not_found ->
+            % 启动预取工作者
+            Worker = spawn_lookahead_worker(ProcID, TargetSlot, Opts),
+            {ok, Worker, undefined}
+    end.
+```
+
+**预取工作者机制**：
+- 在后台预取后续的slot分配
+- 减少查询延迟
+- 支持并发预取多个slot
+
+### 8.3 进程状态一致性
+
+通过`at-slot`指针确保状态一致性：
+
+```erlang
+% 获取当前处理到的slot
+LastProcessed = hb_util:int(
+    hb_ao:get(<<"at-slot">>, Msg1, Opts#{ hashpath => ignore })
+)
+```
+
+**状态前进机制**：
+1. 执行slot N的消息
+2. 更新进程状态
+3. 将`at-slot`指针前进到N+1
+4. 生成状态快照（如果需要）
+
+### 8.4 容错和恢复机制
+
+调度器服务器具有容错能力：
+
+```erlang
+% 服务器启动时的状态恢复
+{CurrentSlot, HashChain} =
+    case dev_scheduler_cache:latest(ProcID, Opts) of
+        not_found ->
+            % 新进程，从slot -1开始
+            {-1, <<>>};
+        {Slot, Chain} ->
+            % 现有进程，从上次保存的状态继续
+            {Slot, Chain}
+    end
+```
+
+**崩溃恢复**：
+- 服务器重启时从缓存恢复最后状态
+- Hash Chain验证消息顺序完整性
+- 自动重建缺失的slot分配
+
+## 结论
+
+HyperBEAM的Actor-Oriented架构通过精心设计的Slots机制，实现了：
+
+1. **进程级隔离**：每个进程维护独立的状态空间和执行序列
+2. **确定性保证**：Slots确保消息的严格顺序执行
+3. **并发优化**：不同进程可并行处理，相同进程串行执行
+4. **可扩展性**：理论上支持无限数量的并发进程
+5. **容错性**：通过缓存和快照实现状态持久化
+6. **性能优化**：预取、缓存和异步处理机制
+
+这种设计完美平衡了区块链的安全性要求与分布式系统的性能需求，为去中心化计算开辟了新的可能性。
+
 ---
 
-*本文档基于 HyperBEAM 代码库分析整理，记录了关于 Actor-Oriented 架构和 Slots 概念的深度理解。如有更新，请及时修正。*
+*本文档基于 HyperBEAM v0.1 代码库深度分析，记录了Actor-Oriented架构和Slots机制的最新实现细节。如有更新，请及时修正。*

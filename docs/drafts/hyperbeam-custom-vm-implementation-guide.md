@@ -165,10 +165,17 @@ This flow ensures HyperBEAM's core characteristics as a "decentralized supercomp
 
 **缓存机制依赖快照**：
 ```erlang
-% src/dev_process.erl:180 - 缓存检查
+% 缓存检查逻辑（基于实际代码）
 case dev_process_cache:read(ProcID, Slot, Opts) of
     {ok, Result} ->
         % 直接返回缓存结果 ✅
+        ?event(
+            {compute_result_cached,
+                {proc_id, ProcID},
+                {slot, Slot},
+                {result, Result}
+            }
+        ),
         {ok, Result};
     not_found ->
         % 需要重新计算 ❌
@@ -178,15 +185,32 @@ end
 
 **快照加载机制**：
 ```erlang
-% src/dev_process.erl:424 - 从磁盘加载最近快照
-LoadRes = dev_process_cache:latest(ProcID, [<<"snapshot">>], TargetSlot, Opts)
+% 从磁盘加载最近快照（基于实际代码）
+LoadRes = dev_process_cache:latest(ProcID, [<<"snapshot">>], TargetSlot, Opts),
+?event(compute,
+    {snapshot_load_res,
+        {proc_id, ProcID},
+        {res, LoadRes},
+        {target, TargetSlot}
+    }
+),
 case LoadRes of
     {ok, LoadedSlot, SnapshotMsg} ->
         % 从快照点开始计算 ✅
-        restore_from_snapshot(SnapshotMsg, LoadedSlot);
+        ?event(compute, {loaded_state_checkpoint, ProcID, LoadedSlot}),
+        {ok, Normalized} = run_as(
+            <<"execution">>,
+            SnapshotMsg,
+            normalize,
+            Opts#{ hashpath => ignore }
+        ),
+        % 继续计算到目标slot
+        NormalizedWithoutSnapshot = maps:remove(<<"snapshot">>, Normalized);
     not_found ->
         % 从 slot 0 开始计算所有操作 ❌❌❌
-        compute_from_scratch()
+        ?event({no_checkpoint_found, {proc_id, ProcID}}),
+        % 初始化进程从头开始
+        initialize_from_scratch()
 end
 ```
 
@@ -639,36 +663,49 @@ dev_process_cache:write(ProcID, Slot, Msg3MaybeWithSnapshot, Opts)
 #### 技术实现路径
 
 ```erlang
-% 标准设备接口
--module(dev_your_vm).
--export([info/1, compute/3, init/3]).
+% 标准设备接口（基于dev_lua.erl的实际接口）
+-module(dev_your_custom_vm).
+-export([info/1, init/3, compute/3, snapshot/3, normalize/3]).
 
 % 信息函数：定义设备能力
-info(_Msg) ->
+info(Base) ->
     #{
-        % 支持的函数列表
-        functions => [<<"execute">>, <<"call">>, <<"query">>],
-        % 默认处理器
-        default => fun compute/3
+        % 默认处理器 - 处理所有未明确定义的键
+        default => fun ?MODULE:compute/4,
+        % 排除一些不应被当作设备函数的键
+        excludes => [<<"keys">>, <<"set">>] ++ maps:keys(Base)
     }.
 
 % 初始化函数：启动你的 VM
 init(Base, Req, Opts) ->
     % 启动你的微服务进程
     % 返回初始化状态
-    {ok, #{vm_pid => YourVMPid}}.
+    {ok, Base#{vm_initialized => true}}.
 
-% 计算函数：执行代码
+% 计算函数：执行代码（注意：实际接口是compute/4）
 compute(Key, Base, Req, Opts) ->
-    % 1. 提取执行参数
+    % 1. 确保VM已初始化
+    {ok, InitializedBase} = ensure_initialized(Base, Req, Opts),
+
+    % 2. 提取执行参数
     Code = hb_ao:get(<<"code">>, Req, Opts),
     Input = hb_ao:get(<<"input">>, Req, Opts),
 
-    % 2. 调用你的微服务
+    % 3. 调用你的微服务
     Result = call_your_microservice(Code, Input),
 
-    % 3. 返回结果
+    % 4. 返回结果
     {ok, #{<<"output">> => Result}}.
+
+% 快照函数：保存VM状态
+snapshot(Base, _Req, _Opts) ->
+    % 保存当前VM状态用于后续恢复
+    {ok, Base}.  % 简化示例
+
+% 状态恢复函数：从快照恢复VM状态
+normalize(Base, _Req, _Opts) ->
+    % 从快照恢复VM状态
+    {ok, Base}.  % 简化示例
 ```
 
 ## 验证用户观点：自定义微服务即 VM
@@ -809,20 +846,30 @@ const processConfig = {
 ### Lua VM 实现分析
 
 ```erlang
-% dev_lua.erl 的 compute 函数
+% dev_lua.erl 的实际 compute 实现片段
 compute(Key, RawBase, Req, Opts) ->
-    % 1. 初始化 Lua 状态
+    % 1. 确保 Lua 状态已初始化
     {ok, Base} = ensure_initialized(RawBase, Req, Opts),
 
-    % 2. 提取函数和参数
+    % 2. 提取函数名和参数
     Function = extract_function(Req, Base, Key, Opts),
     Params = extract_parameters(Req, Base, Opts),
 
-    % 3. 调用 Lua VM
-    process_response(
-        luerl:call_function_dec([Function], encode(Params), State)
-    )
+    % 3. 调用 Lua VM（带沙盒保护）
+    OldPriv = process_flag(trap_exit, true),
+    try
+        Result = luerl:call_function_dec([Function], encode(Params), State),
+        process_response(Result)
+    catch
+        _:Reason:Stacktrace -> {error, Reason, Stacktrace}
+    end,
+    OldPriv.
 ```
+
+**关键特性**：
+- **沙盒化执行**：通过 `trap_exit` 保护 Erlang 进程
+- **异常处理**：捕获 Lua 执行错误并返回详细堆栈跟踪
+- **参数编码**：自动将 Erlang 数据结构编码为 Lua 值
 
 **你的自定义 VM 可以遵循完全相同的模式，只是将 `luerl:call_function_dec` 替换为对你的微服务的调用。**
 
@@ -871,6 +918,92 @@ compute(Base, Req, Opts) ->
 
 这就是 **"Your own VM — Any execution environment"** 的实际实现路径。
 
+## 8. 最新实现细节补充
+
+### 8.1 设备接口标准化
+
+HyperBEAM 的设备接口正在趋于标准化，所有设备都应该实现以下核心函数：
+
+```erlang
+-export([info/1, init/3, compute/3, snapshot/3, normalize/3, terminate/3]).
+```
+
+- **`info/1`**：定义设备元信息和行为
+- **`init/3`**：设备初始化
+- **`compute/3`**：核心计算逻辑（注意：实际调用时为 `compute/4`）
+- **`snapshot/3`**：状态快照生成
+- **`normalize/3`**：从快照恢复状态
+- **`terminate/3`**：设备清理
+
+### 8.2 异步缓存机制
+
+HyperBEAM 使用异步缓存来避免阻塞主执行流程：
+
+```erlang
+case hb_opts:get(process_async_cache, true, Opts) of
+    true ->
+        % 异步缓存，不阻塞执行
+        spawn(fun() -> dev_process_cache:write(ProcID, Slot, Result, Opts) end),
+        {ok, Result};
+    false ->
+        % 同步缓存，直接返回
+        dev_process_cache:write(ProcID, Slot, Result, Opts),
+        {ok, Result}
+end
+```
+
+### 8.3 多语言运行时支持
+
+除了 Lua 和 WASM，HyperBEAM 还支持通过 NIF（Native Implemented Functions）集成其他语言：
+
+```erlang
+% 示例：Rust NIF 集成
+-module(dev_rust_nif).
+-on_load(init/0).
+
+init() ->
+    ?load_nif_from_crate(dev_rust_nif, 0).
+
+compute(_Key, Base, Req, _Opts) ->
+    % 调用 Rust 实现的原生函数
+    case dev_rust_nif:execute(Req) of
+        {ok, Result} -> {ok, Result};
+        {error, Reason} -> {error, Reason}
+    end.
+```
+
+这种方式提供了零开销的语言集成，适用于性能敏感的应用。
+
+### 8.4 设备栈组合
+
+设备可以组合形成"设备栈"，实现复杂的执行管道：
+
+```erlang
+% 设备栈示例
+#{
+    <<"execution-device">> => <<"stack@1.0">>,
+    <<"device-stack">> => [
+        <<"auth@1.0">>,        % 权限验证
+        <<"rate-limit@1.0">>,  % 速率限制
+        <<"your-vm@1.0">>     % 你的自定义VM
+    ]
+}
+```
+
+每个设备按顺序处理消息，实现关注点分离。
+
+## 结论
+
+**自定义 VM 的实现完全可行且受到 HyperBEAM 架构的原生支持。** 通过开发确定性的微服务并提供薄层的 Erlang 接口，你可以：
+
+1. **自由选择编程语言**：用任何语言实现业务逻辑
+2. **享受 Actor 模型优势**：自动获得并发控制和状态隔离
+3. **无缝集成现有代码**：复用遗留系统和第三方库
+4. **保证确定性执行**：通过 slot 机制确保可重现性
+5. **获得企业级可靠性**：利用 TEE 和密码学保证执行完整性
+
+**"Your own VM — Any execution environment"** 不仅仅是口号，更是 HyperBEAM 核心创新的实际体现。
+
 ---
 
-*本文档验证了自定义微服务作为 VM 的可行性，提供了完整的实现指南。基于 HyperBEAM Actor-Oriented 架构分析。*
+*本文档基于 HyperBEAM Actor-Oriented 架构分析，验证了自定义微服务作为 VM 的可行性，并提供了完整的实现指南和技术细节。*

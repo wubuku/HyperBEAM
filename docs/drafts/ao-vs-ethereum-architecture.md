@@ -72,6 +72,10 @@ post_remote_schedule(RawProcID, Redirect, OnlyCommitted, Opts) ->
     end.
 ```
 
+这里值得注意的是，HyperBEAM 支持两种 AO 协议变体：
+- `ao.N.1`：当前的主流协议版本
+- `ao.TN.1`：遗留版本，使用不同的消息编码格式
+
 这里的 `hb_http:post` 最终会通过 `hb_http_client` 发出一个标准的出站HTTP请求到目标节点。
 
 **总结**：AO节点有两种通信方式：
@@ -466,20 +470,25 @@ Res =
 `src/dev_scheduler.erl` 的 `do_post_schedule/4` 函数是处理 `POST /schedule` 请求的核心，其中包含了对创世消息的判断逻辑：
 
 ```erlang
-% src/dev_scheduler.erl -> do_post_schedule/4
 do_post_schedule(ProcID, PID, Msg2, Opts) ->
-    % ... 消息验证 ...
+    % 验证消息签名
     Verified =
         case hb_opts:get(verify_assignments, true, Opts) of
             true ->
                 hb_message:verify(Msg2, signers);
             false -> true
         end,
-    
+
     % 根据消息类型分别处理
     case {Verified, hb_ao:get(<<"type">>, Msg2, Opts)} of
         {false, _} ->
-            {error, #{ <<"status">> => 400, ... }};
+            {error,
+                #{
+                    <<"status">> => 400,
+                    <<"body">> => <<"Message is not valid.">>,
+                    <<"reason">> => <<"Given message does not correctly validate.">>
+                }
+            };
 
         % 当调度器收到一个类型为 "Process" 的消息时
         {true, <<"Process">>} ->
@@ -487,15 +496,23 @@ do_post_schedule(ProcID, PID, Msg2, Opts) ->
             {ok, _} = hb_cache:write(Msg2, Opts),
             % 2. 异步上传到 Arweave 以实现永久存储
             spawn(fun() -> hb_client:upload(Msg2, Opts) end),
-            ?event({registering_new_process, ...}),
+            ?event(
+                {registering_new_process,
+                    {proc_id, ProcID},
+                    {pid, PID},
+                    {is_alive, is_process_alive(PID)}
+                }
+            ),
             % 3. 将其安排进该进程专属的调度服务进程
             {ok, dev_scheduler_server:schedule(PID, Msg2)};
-        
+
         {true, _} ->
             % 对于普通消息，直接安排进调度队列
             {ok, dev_scheduler_server:schedule(PID, Msg2)}
     end.
 ```
+
+这里的关键在于，创世消息的处理是同步的：首先验证消息签名，然后立即将其写入本地缓存，最后异步上传到 Arweave。这种设计确保了进程能够立即开始接受消息，同时保证数据的永久性。
 这段代码显示，当一个经过验证的消息被识别为`<<"Process">>`类型时，`dev_scheduler`会先将其写入缓存并触发上传至Arweave，然后才调用`dev_scheduler_server:schedule/2`，将其发送给对应进程的、独立的调度服务进程（`dev_scheduler_server`）进行最终的slot分配。
 
 ### 5.2 进程定义的最小必须字段
@@ -503,23 +520,27 @@ do_post_schedule(ProcID, PID, Msg2, Opts) ->
 通过分析 `src/dev_process.erl` 中的测试用例，可以总结出创建基础进程的必需字段：
 
 ```erlang
-% src/dev_process.erl 中的 test_base_process/1 函数
-#{
-    % 必须：声明此消息由 process@1.0 设备处理
-    <<"device">> => <<"process@1.0">>,
-    % 必须：声明消息类型为 "Process"，用于触发创建逻辑
-    <<"type">> => <<"Process">>,
-    % 必须：指定调度设备，通常是 scheduler@1.0
-    <<"scheduler-device">> => <<"scheduler@1.0">>,
-    % 必须：指定SU的钱包地址，这是进程安全和活性的命脉
-    <<"scheduler-location">> => Address
-}
+test_base_process() ->
+    test_base_process(#{}).
+test_base_process(Opts) ->
+    Wallet = hb_opts:get(priv_wallet, hb:wallet(), Opts),
+    Address = hb_util:human_id(ar_wallet:to_address(Wallet)),
+    hb_message:commit(#{
+        <<"device">> => <<"process@1.0">>,
+        <<"scheduler-device">> => <<"scheduler@1.0">>,
+        <<"scheduler-location">> => Address,
+        <<"type">> => <<"Process">>,
+        <<"test-random-seed">> => rand:uniform(1337)
+    }, Wallet).
 ```
 
 **总结最小必须字段**：
-- `<<"device">>`: `"process@1.0"` - 定义进程的"物种"
-- `<<"type">>`: `"Process"` - 表明这是创世消息
-- `<<"scheduler-location">>`: Arweave钱包地址 - 指定权威调度单元
+- `<<"device">>`: `"process@1.0"` - 定义进程的处理设备
+- `<<"type">>`: `"Process"` - 表明这是创世消息，触发进程创建逻辑
+- `<<"scheduler-location">>`: Arweave钱包地址 - 指定权威调度单元(SU)
+- `<<"scheduler-device">>`: `"scheduler@1.0"` - 指定调度设备（可选，但推荐明确指定）
+
+注意：`scheduler-device` 字段在某些情况下可能是可选的，因为进程设备可能有默认值，但为了清晰起见，建议总是明确指定。
 
 ### 5.3 进程可以指定设备吗？
 
@@ -618,3 +639,41 @@ AO的架构通过以下方式实现了与传统区块链的根本性区别：
 5.  **动态演进**：进程可以在运行时动态更新其设备和配置，实现真正的自适应计算。
 
 这种设计使得AO在保持去中心化和安全性的同时，突破了传统区块链的性能瓶颈，为大规模并行计算和动态应用生态打开了新的可能性。
+
+## 7. 最新实现细节补充
+
+### 7.1 协议版本支持
+
+HyperBEAM 当前支持多个 AO 协议版本：
+- `ao.N.1`：当前主流版本，支持现代的 JSON-Iface 和 HTTP API
+- `ao.TN.1`：遗留版本，向后兼容早期实现
+
+### 7.2 设备兼容性验证
+
+在加载远程设备时，HyperBEAM 会执行额外的兼容性检查：
+
+```erlang
+case verify_device_compatibility(Msg, Opts) of
+    ok ->
+        % 设备兼容，继续加载
+        ModName = hb_util:key_to_atom(maps:get(<<"module-name">>, Msg), new_atoms),
+        case erlang:load_module(ModName, maps:get(<<"body">>, Msg)) of
+            {module, _} -> {ok, ModName};
+            {error, Reason} -> {error, {device_load_failed, Reason}}
+        end;
+    {error, Reason} ->
+        {error, {device_load_failed, Reason}}
+end
+```
+
+这个验证过程确保了设备代码与当前 HyperBEAM 版本的兼容性，防止运行时错误。
+
+### 7.3 消息签名验证
+
+所有重要的消息操作都会验证签名完整性：
+
+```erlang
+Verified = hb_message:verify(Msg2, signers)
+```
+
+这确保了消息的真实性和不可否认性，是 AO 安全模型的基础。
