@@ -214,7 +214,9 @@ Erlang 没有 `/* ... */` 这样的块注释语法。
 
 ### 0.5 模块与可见性 (Module & Visibility) - 类比 Java 的 public/private
 
-一个 Erlang 文件就是一个模块（Module）。模块是代码组织的基本单元。
+一个 Erlang 文件就是一个模块（Module）。模块是代码组织的基本单元。在这里，你第一次接触到以 `-` 开头的代码，如 `-module` 和 `-export`。这些被称为**模块属性**。
+
+> **深入了解**: 我们在 Day 0 只需了解它们的功能即可。关于模块属性的系统性详解（它们是什么、能否自定义等），请参见 [Day 8: 模块属性详解](#811-模块属性-module-attributes-详解)。
 
 ```erlang
 % 文件名: user_service.erl
