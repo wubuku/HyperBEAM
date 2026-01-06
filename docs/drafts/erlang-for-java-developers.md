@@ -1238,19 +1238,23 @@ file:list_dir(".").   % 目录内容
 ### 6.8 正则表达式
 
 ```erlang
-% 匹配
+% 匹配 (类比 Java 的 Pattern.matcher().matches() 或 find())
 re:run(<<"abc123">>, "\\d+"),          % {match, ...}
 {match, [Match]} = re:run(<<"abc123">>, "\\d+", [{capture, all, binary}]),
 Match,  % <<"123">>
 
-% 分割和替换
+% 分割 (类比 Java 的 Pattern.split())
 re:split(<<"a,b,c">>, ","),            % [<<"a">>, <<"b">>, <<"c">>]
+% 替换 (类比 Java 的 Pattern.matcher().replaceAll())
 re:replace(<<"hello">>, "l", "L", [global]), % <<"heLLo">>
 ```
 
 ## Day 7: 高级特性（Advanced Topics）
 
 ### 7.1 ETS - Erlang 内存数据库
+
+> **核心价值：高性能的堆外共享缓存**
+> 对于 Java 开发者而言，可以将 ETS (Erlang Term Storage) 类比为 JVM 外部（Off-Heap）的一个极其高效的 `ConcurrentHashMap`，但功能更强大，且**不需要担心 Java GC 暂停**。它是 Erlang/OTP 生态系统中最常用的高性能键值存储之一，常用于进程间共享数据、缓存、查找表和大型数据集。它位于 BEAM VM 的堆外内存中，这意味着它不会影响 Erlang 进程的垃圾回收周期，从而保证了极低的延迟和极高的吞吐量。
 
 ```erlang
 % 创建表
@@ -1402,26 +1406,24 @@ erase(key).                        % 删除
 
 ### 8.1 模块基础
 
-```erlang
-% 模块定义
--module(my_module).                    % 文件名必须是 my_module.erl
--export([public_func/1]).              % 导出的函数
--import(lists, [map/2, filter/2]).     % 导入函数
+> Erlang 模块的基本概念和函数可见性（-module, -export）已在 [Day 0: 模块与可见性](#_0_5-模块与可见性-module-visibility---类比-java-的-publicprivate) 中详细介绍。本节将补充其他重要的模块指令。
 
-% 宏定义
+```erlang
+% 模块定义 (详见 Day 0)
+-module(my_module).
+
+% 导出的函数 (详见 Day 0)
+-export([public_func/1]).
+
+% 从其他模块导入函数，使它们可以直接在当前模块中调用，无需写模块名 (例如直接用 map/2 而非 lists:map/2)
+-import(lists, [map/2, filter/2]).
+
+% 宏定义：编译时常量，类似于 Java 的 static final 常量
 -define(TIMEOUT, 5000).
 -define(PI, 3.14159).
 
-% 记录定义
+% 记录定义：在编译时定义结构化的数据类型 (详见 Day 2: 记录)
 -record(user, {id, name, age = 0}).
-
-% 公共函数
-public_func(X) ->
-    private_func(X) * 2.
-
-% 私有函数
-private_func(X) ->
-    X + 1.
 ```
 
 ### 8.2 编译指令
@@ -1443,127 +1445,173 @@ debug_log(_) -> ok.
 
 ### 8.3 类型规范
 
+> **为什么需要类型规范？**
+> Erlang 是一种动态类型语言，这意味着变量的类型在运行时才确定。然而，为了提高代码的**可读性、可维护性**和**可靠性**，Erlang 社区强烈推荐使用类型规范 (Type Specifications)。
+> -   **文档**：类型规范是自文档化的，清晰地表明了函数的输入参数类型和输出结果类型。
+> -   **静态分析**：Erlang 提供了一个强大的静态分析工具 **Dialyzer**。Dialyzer 会读取这些类型规范，并在编译前帮助你发现潜在的类型不匹配错误和代码缺陷，极大地提高了代码质量。这类似于 Java 在编译时进行的类型检查，但 Erlang 的类型规范是可选的，更灵活。
+> -   **契约**：可以将 `-spec` 看作是函数的“契约”或“接口”，它定义了函数应该如何被调用和它将返回什么。这与 Java 中的接口或方法签名具有异曲同工之妙。
+
 ```erlang
-% 函数类型规范
+% 函数类型规范：定义函数的输入参数类型和返回类型
+% 类比 Java 中的方法签名 (例如：public int add(int a, int b))
 -spec add(integer(), integer()) -> integer().
 add(A, B) ->
     A + B.
 
-% 自定义类型
--type user_id() :: pos_integer().
--type user() :: #{id => user_id(), name => binary()}.
+% 自定义类型：你可以定义自己的类型别名，提高可读性
+% 类比 Java 中定义接口或类型别名 (例如：typedef String UserId; 虽然 Java 不直接支持)
+-type user_id() :: pos_integer(). % 正整数
+-type user() :: #{id => user_id(), name => binary()}. % 一个 Map 类型，包含 id 和 name
 
--spec find_user(user_id()) -> {ok, user()} | {error, not_found}.
+% 更复杂的函数类型规范
+-spec find_user(user_id()) -> {ok, user()} | {error, not_found}. % 返回一个 {ok, user} 元组或 {error, not_found} 原子
 ```
 
-### 8.4 NIF 基础
+### 8.4 NIF 基础 (Native Implemented Functions)
+
+> **什么是 NIF？**
+> NIFs (Native Implemented Functions) 允许你在 Erlang 虚拟机 (BEAM VM) 内部直接调用用 C/C++ 或 Rust 等语言编写的原生代码。这提供了一个在 Erlang 应用中执行**性能关键操作**的机制，例如复杂的数学计算、图形处理、或者与特定硬件/操作系统 API 的交互。
+>
+> **何时使用 NIF？**
+> -   **性能瓶颈**：当 Erlang 的纯函数式实现无法满足严格的性能要求时。
+> -   **现有原生库**：需要利用现有的 C/C++ 库而不想重新用 Erlang 实现时。
+> -   **底层系统交互**：与操作系统或硬件进行低级交互，例如设备驱动。
+>
+> **与 Java JNI 的类比与主要风险**
+> -   **类比**：NIFs 在概念上与 Java 的 JNI (Java Native Interface) 非常相似，它们都允许从托管代码调用原生代码。
+> -   **主要风险**：然而，与 Erlang 的“任其崩溃”哲学不同，**NIF 中的任何崩溃 (例如 C 代码中的段错误) 都可能导致整个 Erlang 虚拟机 (BEAM VM) 崩溃**。这意味着所有运行在该 VM 上的 Erlang 进程都会被强制终止。因此，NIF 的开发需要极高的谨慎和严格的测试，以确保其稳定性和安全性。这是在追求极致性能时必须接受的权衡。
 
 ```erlang
-% Erlang 模块
+% Erlang 模块：加载并调用 NIF
 -module(my_nif).
 -export([sha256/1]).
--on_load(init/0).
+-on_load(init/0). % 在模块加载时调用 init/0 函数
 
 init() ->
+    % 找到编译好的 NIF 共享库文件 (.so/.dll/.dylib)
     SoName = filename:join(code:priv_dir(my_app), "my_nif"),
+    % 加载 NIF 库，参数 0 表示不传递任何参数给 NIF 的 init 函数
     ok = erlang:load_nif(SoName, 0).
 
+% 这个函数是 NIF 模块的接口，如果 NIF 未成功加载，调用它会抛出错误
 sha256(_Data) ->
     erlang:nif_error({not_loaded, ?MODULE}).
 
-%% 使用
-Hash = my_nif:sha256(<<"hello">>).
+%% 使用示例
+% Hash = my_nif:sha256(<<"hello">>).
 ```
 
 ```c
-// C NIF 实现
-#include "erl_nif.h"
+// C NIF 实现示例 (my_nif.c)
+#include "erl_nif.h" // Erlang NIF 头文件
+#include <string.h> // for memcpy
 
+// 假设有一个外部的 sha256 实现
+extern void sha256(const unsigned char *data, size_t len, unsigned char *output);
+
+// NIF 函数的签名必须是 ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]
 static ERL_NIF_TERM sha256_nif(ErlNifEnv* env, int argc,
                                 const ERL_NIF_TERM argv[]) {
     ErlNifBinary input;
+    // 检查第一个参数是否为二进制，并获取其数据和长度
     if (!enif_inspect_binary(env, argv[0], &input)) {
-        return enif_make_badarg(env);
+        return enif_make_badarg(env); // 参数错误，返回 Erlang 的 badarg 异常
     }
 
-    unsigned char output[32];
-    sha256(input.data, input.size, output);
+    unsigned char output[32]; // SHA256 输出是 32 字节
+    sha256(input.data, input.size, output); // 调用原生 SHA256 函数
 
     ERL_NIF_TERM result;
+    // 在 Erlang VM 内存中创建新的二进制数据，并复制输出
     unsigned char* result_data = enif_make_new_binary(env, 32, &result);
     memcpy(result_data, output, 32);
 
-    return result;
+    return result; // 返回 Erlang 二进制结果
 }
 
+// 注册 NIF 函数 {Erlang 函数名, 参数个数, C 函数指针}
 static ErlNifFunc nif_funcs[] = {
-    {"sha256", 1, sha256_nif}
+    {"sha256", 1, sha256_nif, ERL_NIF_NORMAL_JOB} // ERL_NIF_NORMAL_JOB 默认在主调度器运行
 };
 
+// NIF 模块初始化宏
 ERL_NIF_INIT(my_nif, nif_funcs, NULL, NULL, NULL, NULL)
 ```
 
-**重要提示**：NIFs 提供了在 Erlang 中执行高性能原生代码的能力。然而，NIF 中的任何崩溃都可能导致整个 Erlang 虚拟机（BEAM VM）崩溃，这与 Erlang 进程的"let it crash"哲学形成对比。因此，NIFs 的开发需要格外小心。
+### 8.5 NIF 脏调度器 (Dirty Schedulers)
 
-### 8.6 NIF 脏调度器 (Dirty Schedulers)
-
-**问题**：NIF 函数必须快速完成（< 1ms），否则会阻塞整个 Erlang 调度器。
-
-**解决方案**：使用脏调度器处理长时间运行的操作。
+> **为什么需要脏调度器？**
+> Erlang 的默认 NIFs (即在主调度器上运行的 NIFs) 要求执行时间非常短 (通常低于 1 毫秒)。如果一个 NIF 执行时间过长，它会阻塞整个 Erlang 调度器，导致所有运行在该调度器上的 Erlang 进程暂停，从而严重影响系统的实时性和响应能力。为了解决这个问题，Erlang/OTP 引入了**脏调度器 (Dirty Schedulers)**。
+>
+> **工作原理**
+> 脏调度器是一组独立于主 Erlang 调度器之外的线程池。当 NIF 被标记为在脏调度器上运行时，这些长时间运行的原生函数就不会阻塞主调度器，从而允许 Erlang 进程继续顺畅执行。
+>
+> **何时使用脏调度器？**
+> 类似于 Java 中将耗时操作提交给专门的线程池 (例如 `ExecutorService`) 来避免阻塞主线程，脏调度器正是为处理以下类型的 NIF 而设计的：
+> -   **CPU 密集型操作**：执行大量计算，例如复杂的加密算法、图像处理、压缩/解压缩。
+> -   **I/O 密集型操作**：涉及阻塞性文件 I/O、网络 I/O 或数据库调用。
+> -   **任何可能执行时间超过 1 毫秒**的操作。
+>
+> **何时不用？**
+> -   对于执行时间极短 (微秒级) 的 NIFs，例如简单的数据转换，在主调度器上运行效率更高，因为避免了调度上下文切换的开销。
+>
+> **脏调度器类型**：
+> - `ERL_NIF_DIRTY_JOB_CPU_BOUND`: 专门用于 CPU 密集型操作的线程池。
+> - `ERL_NIF_DIRTY_JOB_IO_BOUND`: 专门用于 I/O 密集型操作的线程池。
 
 ```erlang
 % Erlang 模块声明脏 NIF
--on_load(init/0).
+-module(my_nif). % 假设这是同一个 NIF 模块
+-export([long_operation/1]).
+-on_load(init/0). % init/0 函数已在 8.4 节定义，这里不再重复
 
+% NIF 函数的 Erlang 接口，如果 NIF 未加载，调用会抛出错误
 long_operation(_Data) ->
     erlang:nif_error({not_loaded, ?MODULE}).
 
-init() ->
-    SoName = filename:join(code:priv_dir(my_app), "my_nif"),
-    ok = erlang:load_nif(SoName, 0).
+% (init/0 函数如 8.4 所示)
 ```
 
 ```c
-// C NIF 实现使用脏调度器
+// C NIF 实现使用脏调度器 (my_nif.c)
+#include "erl_nif.h"
+// ... 其他头文件和函数定义 ...
+
+// 这个函数会在脏调度器上运行，不会阻塞 Erlang 的主调度器
 static ERL_NIF_TERM long_operation_nif(ErlNifEnv* env, int argc,
                                        const ERL_NIF_TERM argv[]) {
-    // 这个函数会在脏调度器上运行
-    // 不会阻塞 Erlang 的主调度器
+    // 假设 heavy_computation() 是一个长时间运行的 C 函数
     heavy_computation();
     return enif_make_atom(env, "ok");
 }
 
 static ErlNifFunc nif_funcs[] = {
-    // 第四个参数指定调度器类型
-    {"long_operation", 0, long_operation_nif, ERL_NIF_DIRTY_JOB_CPU_BOUND}
+    // ... 其他 NIF 函数注册 ...
+    // 第四个参数指定调度器类型：ERL_NIF_DIRTY_JOB_CPU_BOUND 或 ERL_NIF_DIRTY_JOB_IO_BOUND
+    {"long_operation", 1, long_operation_nif, ERL_NIF_DIRTY_JOB_CPU_BOUND}
 };
+
+// ERL_NIF_INIT 宏定义已在 8.4 节展示
 ```
+### 8.6 Rustler NIFs
 
-**脏调度器类型**：
-- `ERL_NIF_DIRTY_JOB_CPU_BOUND`: CPU 密集型操作
-- `ERL_NIF_DIRTY_JOB_IO_BOUND`: I/O 密集型操作
-
-**何时使用**：
-- ✅ CPU 密集计算（加密、压缩）
-- ✅ I/O 操作（文件、网络）
-- ✅ 任何可能 > 1ms 的操作
-
-**何时不用**：
-- ❌ 快速操作（< 1ms）
-- ❌ 简单的数据转换
-
-### 8.5 Rustler NIFs
+> **为什么选择 Rustler？**
+> 虽然可以使用 C/C++ 编写 NIFs，但 Rust 语言因其内存安全、强大的类型系统和并发抽象而成为编写原生代码的优秀选择。**Rustler** 是一个流行的 Rust 库，它极大地简化了 Erlang NIFs 的开发过程。它提供了 Erlang 类型与 Rust 类型之间的无缝转换，并帮助开发者避免了 C NIF 开发中常见的许多内存安全问题，从而降低了 NIF 导致的 VM 崩溃风险。
 
 ```rust
 use rustler::{Binary, Encoder, Env, NifResult, Term};
 
+// 定义一个 Rust NIF 函数，它接受 Erlang 的二进制数据，并返回 Erlang 的 Term (这里是另一个二进制)
 #[rustler::nif]
 fn sha256<'a>(env: Env<'a>, data: Binary) -> NifResult<Term<'a>> {
+    // 假设 compute_sha256 是你的 Rust 实现
     let hash = compute_sha256(data.as_slice());
+    // 将 Rust 值编码回 Erlang Term
     Ok(hash.encode(env))
 }
 
-rustler::init!("my_nif");
+// 初始化 Rustler 模块，名称与 Erlang 模块名对应
+rustler::init!("my_nif", [sha256]);
 ```
 
 ---
