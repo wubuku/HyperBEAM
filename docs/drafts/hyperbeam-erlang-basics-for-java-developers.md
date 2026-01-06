@@ -42,6 +42,7 @@ public class MyModule {
 - Erlang 的官方构建工具和包管理器
 - 类似 Java 的 Maven/Gradle
 - 管理依赖、编译、测试、发布
+- 支持多项目工作区和 umbrella 项目
 
 #### 依赖声明 (rebar.config)
 

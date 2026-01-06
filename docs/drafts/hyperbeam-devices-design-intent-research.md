@@ -15,10 +15,17 @@ HyperBEAM 是 AO-Core 协议的一个 Erlang 实现，是一个去中心化的�
 通过对HyperBEAM代码库的深入分析，我们验证了研究报告的结论：
 
 #### 预加载设备统计
-代码库中`src/hb_opts.erl`的`preloaded_devices`配置包含43个设备，主要分类如下：
-- **技术基础设施**（39个）：编解码器（json、flat、httpsig等）、执行引擎（wasm64、lua）、调度器、缓存系统、支付系统等
+代码库中`src/hb_opts.erl`的`preloaded_devices`配置包含42个设备，主要分类如下：
+- **技术基础设施**（38个）：编解码器（json、flat、httpsig等）、执行引擎（wasm64、lua）、调度器、缓存系统、支付系统等
 - **共识与安全**（3个）：PoDA、SNP（TEE证明）、多重签名
 - **测试/示例**（1个）：`test-device@1.0` (dev_test.erl)
+
+**最新添加的设备**：
+- `weavedb@1.0`：集成WeaveDB去中心化数据库
+- `weavedb-wal@1.0`：WeaveDB预写日志支持
+- `snp@1.0`：AMD SEV-SNP TEE证明支持
+- `p4@1.0`：网络编程协议支持
+- `hyperbuddy@1.0`：AI助手集成
 
 #### 设备接口标准化
 所有设备都遵循统一的`arity 3`函数签名：

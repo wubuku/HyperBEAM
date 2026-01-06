@@ -28,7 +28,7 @@ AO-Core是HyperBEAM的基础协议，提供去中心化计算的框架：
 ### HyperBEAM架构
 HyperBEAM是AO-Core协议的Erlang实现：
 - **去中心化节点**：运行在全球网络中的计算节点
-- **设备生态**：默认预加载43个设备，支持各种计算模式
+- **设备生态**：默认预加载42个设备，支持各种计算模式
 - **状态管理**：通过消息传递和快照机制管理状态
 
 ---
@@ -114,14 +114,20 @@ end.
 
 #### 安装Erlang
 ```bash
-# HyperBEAM 推荐使用 Erlang OTP 27
+# HyperBEAM 推荐使用 Erlang OTP 26 或 27
 # 可使用 asdf、kerl 或其他版本管理工具
 
 # macOS (使用 homebrew)
 brew install erlang
 
-# Ubuntu
+# Ubuntu/Debian
 # 参考 https://www.erlang-solutions.com/downloads/
+# 或使用包管理器
+sudo apt-get install erlang
+
+# 使用 asdf 安装特定版本
+asdf install erlang 26.2.5
+asdf global erlang 26.2.5
 ```
 
 #### 编译运行
@@ -197,21 +203,35 @@ AO Core Resolver (hb_ao)
 
 ### 调用机制
 
-进程通过 `run_as/4` 函数调用设备（伪代码，简化了 prefix 处理和 device 恢复逻辑）：
+进程通过 `run_as/4` 函数调用设备（基于实际代码实现）：
 
 ```erlang
-% dev_process.erl 中的核心调用逻辑示意
+% dev_process.erl 中的核心调用逻辑
 run_as(Key, Msg1, Msg2, Opts) ->
     % 1. 获取基础设备（用于执行后恢复）
-    BaseDevice = hb_ao:get(<<\"device\">>, {as, dev_message, Msg1}, Opts),
+    BaseDevice = hb_ao:get(<<"device">>, {as, dev_message, Msg1}, Opts),
+    ?event({running_as, {key, {explicit, Key}}, {req, Msg2}}),
 
-    % 2. 准备消息：设置目标 device 及 input/output prefix
+    % 2. 准备消息：设置目标设备及前缀
     {ok, PreparedMsg} = dev_message:set(
         ensure_process_key(Msg1, Opts),
         #{
-            <<\"device\">> => TargetDevice,
-            <<\"input-prefix\">> => ...,
-            <<\"output-prefixes\">> => ...
+            <<"device">> => DeviceSet = hb_ao:get(
+                <<Key/binary, "-device">>,
+                {as, dev_message, Msg1},
+                default_device(Msg1, Key, Opts),
+                Opts
+            ),
+            <<"input-prefix">> => case hb_ao:get(<<"input-prefix">>, Msg1, Opts) of
+                not_found -> <<"process">>;
+                Prefix -> Prefix
+            end,
+            <<"output-prefixes">> => hb_ao:get(
+                <<Key/binary, "-output-prefixes">>,
+                {as, dev_message, Msg1},
+                undefined,
+                Opts
+            )
         },
         Opts
     ),
@@ -219,14 +239,19 @@ run_as(Key, Msg1, Msg2, Opts) ->
     % 3. 调用设备
     {Status, BaseResult} = hb_ao:resolve(PreparedMsg, Msg2, Opts),
 
-    % 4. 如果结果消息的 device 仍是目标 device，恢复回 BaseDevice
+    % 4. 如果结果消息的设备仍是目标设备，恢复回基础设备
     case {Status, BaseResult} of
-        {ok, #{ <<\"device\">> := TargetDevice }} ->
-            {ok, hb_ao:set(BaseResult, #{ <<\"device\">> => BaseDevice })};
+        {ok, #{<<"device">> := DeviceSet}} ->
+            {ok, hb_ao:set(BaseResult, #{<<"device">> => BaseDevice})};
         _ ->
             {Status, BaseResult}
     end.
 ```
+
+**关键特性**：
+- **动态设备选择**：根据 `Key-device` 字段动态选择目标设备
+- **前缀管理**：支持输入和输出前缀配置
+- **设备恢复**：确保调用完成后恢复到原始设备上下文
 
 ### 进程配置示例
 
@@ -662,3 +687,113 @@ ProcessConfig = #{
 所有描述均直接对应代码库中的实际实现，确保技术准确性和可靠性。
 
 通过这套架构，HyperBEAM为开发者提供了一个强大而灵活的去中心化计算平台，既保持了区块链的安全性和去中心化特性，又提供了传统编程的便利性和易用性。
+
+## 8. 最新实现细节补充
+
+### 8.1 设备生态系统扩展
+
+HyperBEAM的设备生态系统正在持续扩展，最新添加的设备包括：
+
+```erlang
+% 最新设备列表摘录 (hb_opts.erl)
+preloaded_devices => [
+    #{<<"name">> => <<"weavedb@1.0">>, <<"module">> => dev_weavedb},
+    #{<<"name">> => <<"weavedb-wal@1.0">>, <<"module">> => dev_weavedb_wal},
+    #{<<"name">> => <<"snp@1.0">>, <<"module">> => dev_snp},
+    #{<<"name">> => <<"p4@1.0">>, <<"module">> => dev_p4},
+    #{<<"name">> => <<"hyperbuddy@1.0">>, <<"module">> => dev_hyperbuddy},
+    % ... 更多设备
+]
+```
+
+**新增设备功能**：
+- **weavedb@1.0**：集成WeaveDB去中心化数据库
+- **snp@1.0**：AMD SEV-SNP可信执行环境支持
+- **p4@1.0**：网络编程协议支持
+- **hyperbuddy@1.0**：AI助手集成
+
+### 8.2 消息处理流水线优化
+
+最新的消息处理流水线包含更多优化：
+
+```erlang
+% hb_http_server.erl - 请求处理流程
+handle_request(RawReq, Body, ServerID) ->
+    StartTime = os:system_time(millisecond),
+    Req = RawReq#{start_time => StartTime},
+    NodeMsg = get_opts(#{http_server => ServerID}),
+
+    % 1. 解析HTTP请求为AO消息
+    ReqSingleton = hb_http:req_to_tabm_singleton(Req, Body, NodeMsg),
+
+    % 2. 确定编解码器
+    CommitmentCodec = hb_http:accept_to_codec(ReqSingleton, NodeMsg),
+
+    % 3. 调用meta设备处理
+    {ok, Res} = hb_ao:resolve(
+        hb_singleton:from(#{<<"device">> => <<"meta@1.0">>}),
+        ReqSingleton,
+        NodeMsg#{commitment_codec => CommitmentCodec}
+    ),
+
+    % 4. 返回HTTP响应
+    hb_http:reply(Req, Res, NodeMsg).
+```
+
+**性能优化点**：
+- **时间戳记录**：从请求开始就记录时间戳用于性能监控
+- **编解码器协商**：根据Accept头动态选择编解码器
+- **错误处理增强**：更详细的错误信息和堆栈跟踪
+
+### 8.3 进程并发控制机制
+
+HyperBEAM实现了精细的进程并发控制：
+
+```erlang
+% dev_process_worker.erl - 并发组管理
+process_to_group_name(Msg1, Opts) ->
+    Initialized = dev_process:ensure_process_key(Msg1, Opts),
+    ProcMsg = hb_ao:get(<<"process">>, Initialized, Opts#{hashpath => ignore}),
+    ID = hb_message:id(ProcMsg, all),
+    hb_util:human_id(ID).  % 返回进程ID作为并发组标识
+```
+
+**并发策略**：
+- **进程级隔离**：相同进程的执行被分组到同一并发单元
+- **跨进程并行**：不同进程可以并行执行
+- **工作池管理**：通过worker进程池优化资源利用
+
+### 8.4 缓存和状态管理增强
+
+最新的缓存机制包含多层优化：
+
+```erlang
+% 异步缓存写入
+case hb_opts:get(process_async_cache, true, Opts) of
+    true ->
+        % 异步缓存，避免阻塞主执行流程
+        spawn(fun() -> dev_process_cache:write(ProcID, Slot, Result, Opts) end),
+        {ok, Result};
+    false ->
+        % 同步缓存，确保立即持久化
+        dev_process_cache:write(ProcID, Slot, Result, Opts),
+        {ok, Result}
+end
+```
+
+**缓存策略**：
+- **异步写入**：不阻塞计算流程，提高响应性
+- **多级缓存**：内存缓存 + 磁盘缓存 + Arweave持久化
+- **智能失效**：基于slot和时间戳的缓存失效策略
+
+## 结论
+
+HyperBEAM的核心概念建立在坚实的理论基础之上，并通过持续的工程优化实现了高性能的去中心化计算平台。理解这些核心概念是掌握HyperBEAM开发的关键：
+
+1. **消息驱动**：一切都是消息，消息驱动状态变化
+2. **设备组合**：通过设备组合实现复杂功能
+3. **进程隔离**：每个进程都是独立的执行环境
+4. **确定性保证**：相同的输入总是产生相同的输出
+5. **状态持久化**：通过快照和缓存确保状态一致性
+
+这种设计不仅保证了去中心化的安全性，还提供了传统编程的便利性和现代系统的性能特征。

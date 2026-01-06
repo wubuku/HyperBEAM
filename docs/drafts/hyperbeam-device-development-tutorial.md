@@ -8,8 +8,9 @@
 
 **HyperBEAM的HTTP响应数据通常在HTTP头中，但也可以在响应体中返回！**
 
-- **默认行为**：使用 `httpsig@1.0` codec，数据在HTTP头中
+- **默认行为**：使用 `httpsig@1.0` codec，数据在HTTP头中（便于数字签名）
 - **可选行为**：某些设备函数可以返回 `<<"body">>` 字段，数据将在响应体中
+- **编解码器选择**：通过 `hb_http:accept_to_codec/2` 根据Accept头选择编解码器
 - 使用 `curl -v` 查看完整响应（头 + 体）
 - 这是HyperBEAM的设计特点，便于数字签名和类型安全
 
