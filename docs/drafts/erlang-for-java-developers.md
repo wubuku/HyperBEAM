@@ -1126,14 +1126,14 @@ main() ->
 ### 6.2 二进制操作
 
 ```erlang
-% 分割
+% 分割 (类比 Java 的 String.split() 或 Pattern.split())
 binary:split(<<"a,b,c">>, <<",">>),        % [<<"a">>, <<"b,c">>]
 binary:split(<<"a,b,c">>, <<",">>, [global]), % [<<"a">>, <<"b">>, <<"c">>]
 
-% 替换
+% 替换 (类比 Java 的 String.replace() 或 String.replaceAll())
 binary:replace(<<"hello">>, <<"l">>, <<"L">>, [global]), % <<"heLLo">>
 
-% 编码
+% 编码/解码 (类比 Java 中将字节数组转换为十六进制字符串，如 DatatypeConverter.printHexBinary())
 binary:encode_hex(<<1, 255>>), % <<"01ff">>
 binary:decode_hex(<<"01ff">>), % <<1, 255>>
 ```
@@ -1141,74 +1141,97 @@ binary:decode_hex(<<"01ff">>), % <<1, 255>>
 ### 6.3 加密
 
 ```erlang
-% 哈希
+% 哈希 (类比 Java 的 MessageDigest.getInstance("算法").digest())
 crypto:hash(sha256, <<"data">>),  % 32字节哈希
 crypto:hash(sha512, <<"data">>),  % 64字节哈希
 
-% HMAC
+% HMAC (类比 Java 的 Mac.getInstance("算法").doFinal())
 Key = <<"secret">>,
 crypto:mac(hmac, sha256, Key, <<"data">>),
 
-% 随机数
+% 随机数 (类比 Java 的 SecureRandom.getInstanceStrong().nextBytes())
 crypto:strong_rand_bytes(32).    % 安全随机字节
 ```
 
 ### 6.4 列表操作
 
 ```erlang
+% 反转 (类比 Java 的 Collections.reverse(list))
 lists:reverse([1,2,3]),        % [3,2,1]
+% 排序 (类比 Java 的 Collections.sort(list) 或 list.stream().sorted())
 lists:sort([3,1,2]),           % [1,2,3]
+% 检查成员 (类比 Java 的 list.contains())
 lists:member(2, [1,2,3]),      % true
+% 获取第N个元素 (类比 Java 的 list.get(index)，但 Erlang 是 1-based index，且性能为 O(N))
 lists:nth(2, [a,b,c]),         % b (1索引！)
 
+% 映射 (类比 Java Stream API 的 .map())
 lists:map(fun(X) -> X*2 end, [1,2,3]),    % [2,4,6]
+% 过滤 (类比 Java Stream API 的 .filter())
 lists:filter(fun(X) -> X>2 end, [1,2,3,4]), % [3,4]
+% 折叠/归约 (类比 Java Stream API 的 .reduce())
 lists:foldl(fun(X,Acc) -> X+Acc end, 0, [1,2,3]), % 6
 ```
 
 ### 6.5 映射操作
 
 ```erlang
+% 获取值 (类比 Java 的 map.get(key)，如果不存在会抛出异常)
 maps:get(key, Map),                    % 值或异常
+% 获取值，带默认值 (类比 Java 的 map.getOrDefault(key, Default))
 maps:get(key, Map, Default),           % 值或默认值
+% 插入/更新 (类比 Java 的 map.put(key, value))
 maps:put(key, value, Map),             % 新映射
+% 更新（键必须存在，类比 Java 的 map.computeIfPresent()）
 maps:update(key, value, Map),          % 更新（必须存在）
+% 删除 (类比 Java 的 map.remove(key))
 maps:remove(key, Map),                 % 删除
 
+% 获取所有键/值 (类比 Java 的 map.keySet(), map.values())
 maps:keys(Map), maps:values(Map),      % 键值列表
+% 合并 (类比 Java 合并两个 HashMap)
 maps:merge(M1, M2),                    % 合并
+% 遍历并转换 (类比 Java 的 map.entrySet().stream().map())
 maps:map(fun(K,V) -> V*2 end, Map).    % 变换
 ```
 
 ### 6.6 字符串操作
 
 ```erlang
+% 转换为大写 (类比 Java 的 String.toUpperCase())
 string:uppercase(<<"hello">>),         % <<"HELLO">>
+% 转换为小写 (类比 Java 的 String.toLowerCase())
 string:lowercase(<<"HELLO">>),         % <<"hello">>
+% 去除首尾空白 (类比 Java 的 String.trim())
 string:trim(<<" hello ">>),            % <<"hello">>
 
+% 分割 (类比 Java 的 String.split()，注意 Erlang 的 string 模块主要处理字符列表，二进制应使用 binary:split)
 string:split(<<"a,b,c">>, <<",">>),    % [<<"a">>, <<"b,c">>]
+% 查找子串 (类比 Java 的 String.indexOf() 或 Pattern.matcher().find())
 string:find(<<"hello world">>, <<"world">>), % <<"world">>
 ```
 
 ### 6.7 文件 I/O
 
 ```erlang
-% 读取
+% 读取整个文件 (类比 Java 的 Files.readAllBytes() 或 Files.readString())
 {ok, Data} = file:read_file("file.txt"),
+% 逐行读取 (类比 Java 的 BufferedReader 和 FileReader)
 {ok, Fd} = file:open("file.txt", [read]),
 {ok, Line} = file:read_line(Fd),
 file:close(Fd),
 
-% 写入
+% 写入整个文件 (类比 Java 的 Files.write())
 file:write_file("out.txt", <<"data">>),
+% 逐行写入 (类比 Java 的 BufferedWriter 和 FileWriter)
 {ok, Fd} = file:open("out.txt", [write]),
 file:write(Fd, <<"line\n">>),
 file:close(Fd),
 
-% 信息
+% 获取文件信息 (类比 Java 的 Files.readAttributes() 或 File.length())
 {ok, Info} = file:read_file_info("file.txt"),
 Info#file_info.size,  % 文件大小
+% 列出目录内容 (类比 Java 的 Files.list() 或 File.listFiles())
 file:list_dir(".").   % 目录内容
 ```
 
