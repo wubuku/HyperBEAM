@@ -1607,8 +1607,8 @@ string:lowercase(<<"HELLO">>),         % <<"hello">>
 % 去除首尾空白 (类比 Java 的 String.trim())
 string:trim(<<" hello ">>),            % <<"hello">>
 
-% 分割 (类比 Java 的 String.split()，注意 Erlang 的 string 模块主要处理字符列表，二进制应使用 binary:split)
-string:split(<<"a,b,c">>, <<",">>),    % [<<"a">>, <<"b,c">>]
+% 分割 (类比 Java 的 String.split()，处理二进制字符串请务必使用 `binary` 模块)
+binary:split(<<"a,b,c">>, <<",">>, [global]),    % [<<"a">>, <<"b">>, <<"c">>]
 % 查找子串 (类比 Java 的 String.indexOf() 或 Pattern.matcher().find())
 string:find(<<"hello world">>, <<"world">>), % <<"world">>
 ```
@@ -1648,7 +1648,7 @@ Match,  % <<"123">>
 % 分割 (类比 Java 的 Pattern.split())
 re:split(<<"a,b,c">>, ","),            % [<<"a">>, <<"b">>, <<"c">>]
 % 替换 (类比 Java 的 Pattern.matcher().replaceAll())
-re:replace(<<"hello">>, "l", "L", [global]), % <<"heLLo">>
+re:replace(<<"hello">>, <<"l">>, <<"L">>, [global]), % <<"heLLo">>
 ```
 
 ## Day 7: 高级特性（Advanced Topics）
@@ -2063,24 +2063,20 @@ ERL_NIF_INIT(my_nif, nif_funcs, NULL, NULL, NULL, NULL)
 > - `ERL_NIF_DIRTY_JOB_IO_BOUND`: 专门用于 I/O 密集型操作的线程池。
 
 ```erlang
-% Erlang 模块声明脏 NIF
--module(my_nif). % 假设这是同一个 NIF 模块
+%% 在 my_nif.erl 中添加以下内容
 -export([long_operation/1]).
--on_load(init/0). % init/0 函数已在 8.4 节定义，这里不再重复
 
-% NIF 函数的 Erlang 接口，如果 NIF 未加载，调用会抛出错误
+% 这个函数将在脏调度器上运行
 long_operation(_Data) ->
     erlang:nif_error({not_loaded, ?MODULE}).
-
-% (init/0 函数如 8.4 所示)
 ```
 
 ```c
 // C NIF 实现使用脏调度器 (my_nif.c)
 #include "erl_nif.h"
-// ... 其他头文件和函数定义 ...
+// ... 其他已在 8.4 节定义的函数 (如 sha256_nif) ...
 
-// 这个函数会在脏调度器上运行，不会阻塞 Erlang 的主调度器
+// 这个函数将在脏调度器上运行，不会阻塞 Erlang 的主调度器
 static ERL_NIF_TERM long_operation_nif(ErlNifEnv* env, int argc,
                                        const ERL_NIF_TERM argv[]) {
     // 假设 heavy_computation() 是一个长时间运行的 C 函数
@@ -2088,13 +2084,15 @@ static ERL_NIF_TERM long_operation_nif(ErlNifEnv* env, int argc,
     return enif_make_atom(env, "ok");
 }
 
+// 现在 nif_funcs 数组包含两个 NIF 函数的注册信息
 static ErlNifFunc nif_funcs[] = {
-    // ... 其他 NIF 函数注册 ...
-    // 第四个参数指定调度器类型：ERL_NIF_DIRTY_JOB_CPU_BOUND 或 ERL_NIF_DIRTY_JOB_IO_BOUND
+    // 8.4 节中定义的 NIF
+    {"sha256", 1, sha256_nif, ERL_NIF_NORMAL_JOB},
+    // 8.5 节新增的“脏” NIF
     {"long_operation", 1, long_operation_nif, ERL_NIF_DIRTY_JOB_CPU_BOUND}
 };
 
-// ERL_NIF_INIT 宏定义已在 8.4 节展示
+// ERL_NIF_INIT 宏定义已在 8.4 节展示，它会使用这个完整的 nif_funcs 数组
 ```
 ### 8.6 Rustler NIFs
 
