@@ -1647,13 +1647,110 @@ erase(key).                        % 删除
 
 > Erlang 模块的基本概念和函数可见性（-module, -export）已在 [Day 0: 模块与可见性](#_0_5-模块与可见性-module-visibility---类比-java-的-publicprivate) 中详细介绍。本节将补充其他重要的模块指令。
 
+#### 8.1.1 模块属性（Module Attributes）详解
+
+Java 开发者看到 `-module(...)`、`-export(...)` 这样的写法时，往往会困惑：这些 `-` 开头的代码是什么？是 Erlang 的"内置指令"吗？能不能扩展？
+
+**答案是：不是"内置指令"，而是模块属性（Module Attributes）/预处理指令，语法上统一是：**
+
 ```erlang
-% 模块定义 (详见 Day 0)
--module(my_module).
+-Name(Value).
+```
 
-% 导出的函数 (详见 Day 0)
--export([public_func/1]).
+比如你之前看到的这些：
 
+```erlang
+-module(simple_process).
+-export([start/0, hello_process/0]).
+-behaviour(gen_server).
+-include("header.hrl").
+-spec foo(integer()) -> ok.
+-type my_type() :: atom() | integer().
+```
+
+##### 它们到底是什么？
+
+Erlang 规定：所有 `-xxx(...)` 这种写法叫**模块属性**（module attributes）。
+
+**通用形式：**
+```erlang
+-AttributeName(AttributeValue).
+```
+
+**常见内置属性：**
+
+- `-module(Name).`：模块名（必须有，且唯一）
+- `-export([f1/2, f2/3]).`：导出函数列表
+- `-import(mod, [f/2]).`：从其他模块导入函数
+- `-behaviour(gen_server).`：声明行为（OTP 回调模块）
+- `-include("file.hrl").` / `-include_lib("...").`：包含头文件
+- `-record(name, {...}).`：定义 record
+- `-spec` / `-type` / `-opaque`：类型和函数规格声明
+- `-compile(...)`：编译选项
+
+这些名字（`module`、`export` 等）是编译器认识的特殊属性，编译时会有**特殊含义**。
+
+##### 能不能扩展？——可以自定义属性
+
+是的，你完全可以写**自定义属性**，比如：
+
+```erlang
+-module(my_mod).
+
+-author("your_name").
+-company({name, "ACME", country, "CN"}).
+-version("1.0.0").
+```
+
+编译器不会报错，自定义属性会被当作**元数据**存进模块里，可以通过 `module_info(attributes)` 读出来。
+
+**示例：**
+
+```erlang
+-module(meta_demo).
+-author("Alice").
+-company({name, "ACME"}).
+-export([info/0]).
+
+info() ->
+    meta_demo:module_info(attributes).
+```
+
+在 Erlang shell 中运行：
+
+```erlang
+1> c(meta_demo).
+{ok,meta_demo}
+2> meta_demo:info().
+[{author,["Alice"]},
+ {company,[{name,"ACME"}]},
+ ...  %% 还会有其他编译器自动加的属性
+]
+```
+
+**规则/限制：**
+
+- **语法上**：`-name(Value).`，只要是合法的 Erlang term 就行
+- **一般**一个属性名只接受一个参数（但这个参数可以是 tuple / list）
+- **属性必须写在函数定义之前**（尤其是内置属性，如 `-spec`、`-type` 等对顺序有要求）
+- **编译器对不认识的属性不会报错**，只是当作元数据存起来
+
+##### 小结
+
+1. **"`-` 开头的代码是什么东西？"**
+   - 是**模块属性 / 预处理指令**，不是"语句"，不会在运行时执行，而是在编译期起作用或作为元数据存在。
+
+2. **"是 Erlang 的内置指令吗？"**
+   - 部分是"内置的已知属性"（如 `-module`、`-export`、`-behaviour` 等），编译器有特殊处理。
+   - 其余名字（如 `-author`、`-company`）则是**自定义属性**，只是存储元数据，没有内置语义。
+
+3. **"这个能扩展吗？"**
+   - **可以**，随便定义：`-your_tag(AnythingYouLike).`
+   - 然后用 `Module:module_info(attributes)` 在运行时读出来做自己想做的事（如文档、代码生成、元编程等）。
+
+#### 8.1.2 其他模块指令
+
+```erlang
 % 从其他模块导入函数，使它们可以直接在当前模块中调用，无需写模块名 (例如直接用 map/2 而非 lists:map/2)
 -import(lists, [map/2, filter/2]).
 
@@ -1663,6 +1760,10 @@ erase(key).                        % 删除
 
 % 记录定义：在编译时定义结构化的数据类型 (详见 Day 2: 记录)
 -record(user, {id, name, age = 0}).
+
+% 自定义属性示例
+-author("your_name").
+-version("1.0.0").
 ```
 
 ### 8.2 编译指令
