@@ -1120,7 +1120,12 @@ ping_server(PongPid) ->
 -export([init/1, handle_call/3, handle_cast/2]).
 
 % 启动服务器
-start_link() -> gen_server:start_link({local, ?MODULE}, ?MODULE, 0, []).
+start_link() ->
+    % ?MODULE 是一个预处理宏，它在编译时会被自动替换为当前模块的名字
+    % 在这里，它等价于原子 counter。
+    % {local, ?MODULE} 的作用是将这个 gen_server 进程注册一个本地名称，
+    % 这样我们就可以用 counter 这个名字来调用它，而不需要知道它的进程ID (Pid)。
+    gen_server:start_link({local, ?MODULE}, ?MODULE, 0, []).
 
 % --- API 实现 ---
 
@@ -1149,6 +1154,162 @@ handle_cast(increment, Count) ->
 
 -   **`handle_call`** → **同步** → 类比需要返回值的 service 方法。
 -   **`handle_cast`** → **异步** → 类比往 `BlockingQueue` 中 `put` 一个事件。
+
+#### 5.4.1 深入解析：行为 (Behaviour) 与“接口”
+
+在 `counter` 示例中，我们使用了 `-behaviour(gen_server).`，并说它类似于 Java 的 `implements` 接口。这是一个非常重要的概念，值得深入探讨。
+
+**核心思想**：在 Erlang 中，“接口”不是一个像 `interface` 那样的关键字，而是一套由“行为模块 (behaviour module)”用模块属性声明的、**必须由“回调模块 (callback module)”实现的函数签名**。
+
+让我们分步拆解这个机制：
+
+##### 1. “行为模块”如何定义“接口”？
+
+一个行为模块（例如 `gen_server` 或者你自己写的 `my_behaviour`）负责定义一套契约，即“实现者”必须提供哪些函数。它有两种方式来定义这个“接口”：
+
+**方式一：现代推荐写法 `-callback` 属性**
+
+这是现代 OTP 代码中的标准做法，因为它允许附带类型规范，可以被 Dialyzer 静态分析工具和文档工具利用。
+
+```erlang
+%% 在一个名为 my_behaviour.erl 的行为模块中
+-module(my_behaviour).
+
+%% 定义一个名为 init 的回调，它接受一个参数，返回 {ok, State} 或 {error, Reason}
+-callback init(Args :: term()) ->
+    {ok, State :: term()} | {error, Reason :: term()}.
+
+%% 定义一个名为 handle_something 的回调...
+-callback handle_something(Event :: term(), State :: term()) ->
+    {noreply, NewState :: term()}.
+```
+**含义**：任何声明 `-behaviour(my_behaviour).` 的模块，都必须实现并导出一个名为 `init`、参数为1的函数，以及一个名为 `handle_something`、参数为2的函数，并且它们的实现最好能满足 `-callback` 中声明的类型规范。
+
+**方式二：老式兼容写法 `behaviour_info/1` 函数**
+
+在早期 OTP 版本中，行为是通过导出一个名为 `behaviour_info/1` 的函数来定义其回调的。
+
+```erlang
+%% 在行为模块 my_behaviour.erl 中
+-module(my_behaviour).
+-export([behaviour_info/1]).
+
+behaviour_info(callbacks) ->
+    [
+        {init, 1}, % 函数名, 元数
+        {handle_something, 2}
+    ];
+behaviour_info(_Other) ->
+    undefined.
+```
+这两种方式的含义完全相同，但 `-callback` 显然供了更丰富的信息。
+
+##### 2. “回调模块”如何“实现接口”？
+
+你的模块（如 `counter`）通过 `-behaviour` 属性来“承诺”实现这套接口。
+
+```erlang
+-module(counter).
+-behaviour(gen_server). % 我承诺实现 gen_server 这套接口
+
+% 我必须导出所有 gen_server 要求的回调函数
+-export([init/1, handle_call/3, handle_cast/2]).
+
+init(Args) -> ...
+handle_call(Request, From, State) -> ...
+handle_cast(Request, State) -> ...
+```
+
+**编译器和工具此时会进行检查**：
+1.  当你写下 `-behaviour(gen_server).`，编译器会去 `gen_server` 模块里查找它的 `-callback` 定义。
+2.  然后，它会检查你的 `counter` 模块是否**实现**了所有必需的回调函数，并且是否将它们加入了 `-export` 列表（因为 `gen_server` 的代码需要跨模块调用它们）。
+3.  如果缺少任何一个，编译器会发出警告，提示你“缺少回调函数实现”。
+
+##### 3. `gen_server` 的“接口”究竟是什么？
+
+`gen_server` 的“接口”就是定义在其模块内部的一系列 `-callback` 属性。下面是它主要回调函数的（简化版）定义：
+
+```erlang
+%% 这是在 OTP 的 gen_server.erl 源码中的概念示意
+-module(gen_server).
+
+-callback init(Args :: term()) -> {ok, State} | {ok, State, Timeout} | ...
+
+-callback handle_call(Request, From, State) -> {reply, Reply, NewState} | ...
+
+-callback handle_cast(Request, State) -> {noreply, NewState} | ...
+
+-callback handle_info(Info, State) -> {noreply, NewState} | ...
+
+-callback terminate(Reason, State) -> any().
+
+-callback code_change(OldVsn, State, Extra) -> {ok, NewState}.
+```
+这一整套 `-callback` 声明，就是 `gen_server` 行为的完整契约。
+
+##### 4. 总结：Java `interface` 与 Erlang `behaviour` 的完整类比
+
+| Java `interface` | Erlang `behaviour` |
+| :--- | :--- |
+| `public interface MyInterface { void doSomething(int arg); }` | 在 `my_behaviour.erl` 中:<br>`-callback do_something(Arg :: integer()) -> ok.` |
+| `public class MyClass implements MyInterface { ... }` | 在 `my_module.erl` 中:<br>`-behaviour(my_behaviour).` |
+| 编译器检查 `MyClass` 是否实现了 `doSomething(int)` | 编译器检查 `my_module` 是否实现并导出了 `do_something/1`。 |
+| 运行时，通过接口引用调用实现类的方法 | 运行时，`gen_server` 这样的行为模块通过函数名/元数调用回调模块的函数。 |
+
+所以，当你看到 `-behaviour` 时，你的思维模型应该是：
+1.  这是一个**编译时契约**，用于保证模块实现了必要的回调函数。
+2.  这是一个**运行时模式**，一个通用的驱动模块（如`gen_server`）会根据这套契约来调用你的具体实现。
+
+#### 5.4.2 深入解析：`gen_server` 的“无状态”外观与状态管理
+
+你可能已经注意到了 `counter` 示例中一个与 Java 等面向对象语言非常不同的地方：**服务器的状态（`Count`）似乎是作为参数在函数间传来传去，而不是像 `this.count` 一样作为对象的字段存在。** 这让它看起来像是一个“无状态”的服务，但它实际上是有状态的。这正是 OTP `gen_server` 状态管理的核心，也是函数式编程思想的体现。
+
+**`gen_server` 的状态循环揭秘**
+
+`gen_server` 本身可以被看作一个内置了“状态循环”的进程。这个循环你看不见，但它真实存在。
+
+1.  **初始化**: `gen_server:start_link` 调用你的 `init(InitialCount)` 回调。你返回 `{ok, InitialCount}`，这告诉 `gen_server` 的循环：“请将我的初始状态设置为 `InitialCount`”。
+2.  **等待消息**: `gen_server` 循环进入等待状态，此时它持有着当前的状态（第一次是 `InitialCount`）。
+3.  **处理请求**: 当一个 `gen_server:call(..., get)` 到达时，`gen_server` 循环会：
+    a.  调用你的 `handle_call(get, _From, State)` 回调，并将它**内部持有的当前状态**作为最后一个参数 `State` 传给你。
+    b.  你的回调函数执行逻辑，然后返回 `{reply, Reply, NewState}`。
+4.  **更新状态**: `gen_server` 循环接收到这个返回元组后：
+    a.  它将 `Reply` 发送回客户端。
+    b.  它**丢弃旧的状态**，并**将 `NewState` 作为它新的内部持有状态**。
+5.  **继续循环**: `gen_server` 再次进入等待状态，但此时它持有的已经是 `NewState`。
+
+**与 Java 的 `while` 循环类比**
+
+想象一下 `gen_server` 内部有一个这样的 `while` 循环（伪代码）：
+
+```java
+// 这是 gen_server 内部循环的 Java 思想伪代码
+public void serverLoop(Object initialState) {
+    Object currentState = initialState; // 1. 从 init 获取初始状态
+
+    while (true) { // 2. 进入无限循环
+        Message msg = mailbox.take(); // 等待消息
+
+        // 3. 根据消息类型调用不同的回调，并传入当前状态
+        if (msg instanceof Call) {
+            CallbackResult res = handle_call(msg.request, msg.from, currentState);
+            // 4. 从回调结果中获取新状态
+            currentState = res.newState;
+            // 发送回复...
+        } else if (msg instanceof Cast) {
+            CallbackResult res = handle_cast(msg.request, currentState);
+            // 4. 从回调结果中获取新状态
+            currentState = res.newState;
+        }
+        // 5. 带着更新后的状态，回到循环的开始，等待下一条消息
+    }
+}
+```
+
+**结论：**
+-   Erlang 的 `gen_server` **不是无状态的**。它的状态由 `gen_server` 进程自身在一个递归循环中安全地、隔离地持有。
+-   你写的 `handle_call`/`handle_cast` 等回调函数，可以看作是这个**状态循环中的一环**。它们被调用时会获得当前的状态，并且有责任返回一个新的状态给循环。
+-   这种模式是函数式编程的核心：**状态不是在原地被修改（mutation），而是通过函数（回调）计算出一个新的状态来替代旧的状态**。这使得状态的变更非常明确和可追溯，也完全避免了并发修改状态的风险，因为一次只有一个消息在被处理。
 
 ### 5.5 Supervisor - “任其崩溃”的守护神
 
