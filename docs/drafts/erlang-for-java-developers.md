@@ -2118,7 +2118,7 @@ rustler::init!("my_nif", [sha256]);
 ### 8.7 宏 (Macros) 与预处理
 
 > **为什么 Java 开发者需要了解宏？**
-> Java 开发者通常熟悉 `public static final` 常量，但 Erlang 的宏更强大：它是一种**编译时代码替换机制**，能定义常量、简化重复代码，甚至实现条件编译。这与 C/C++ 的预处理器宏相似，但更安全、更易用。
+> Java 开发者通常熟悉 `public static final` 常量，但 Erlang 的宏更强大：它是一种**编译时代码替换机制**，能定义常量、简化重复代码，甚至实现条件编译。这与 C/C++ 的预处理器宏相似，但更安全、更易用——避免了 C 宏中常见的操作符优先级问题和参数多次求值导致的副作用。
 
 #### 8.7.1 宏的概念与 Java 类比
 
@@ -2179,7 +2179,7 @@ calculate_area(Radius) ->
     Area.
 ```
 
-**关键区别：** Erlang 的参数宏不像 C 宏那样容易出错——它不会意外地修改传入的表达式。
+**关键区别：** Erlang 的参数宏不像 C 宏那样容易出错——它不会意外地修改传入的表达式。这是由于 Erlang 宏在展开时，参数会先被求值，然后才替换到宏体中，从而避免了 C 宏中参数多次求值（可能产生副作用）和操作符优先级可能引发的意外行为。
 
 ##### 内置宏：`?MODULE` 详解
 
@@ -2207,6 +2207,18 @@ start_link() ->
 - `?LINE`：当前行号（用于调试）
 - `?FILE`：当前文件名
 
+**`?LINE` 和 `?FILE` 的示例：**
+
+```erlang
+% 在 my_module.erl 中
+my_debug_function(Value) ->
+    io:format("Debug: Value is ~p. Called from ~s, line ~w.~n", [Value, ?FILE, ?LINE]).
+
+% 调用：
+% my_module:my_debug_function(42).
+% 输出可能类似: Debug: Value is 42. Called from "my_module.erl", line 12.
+```
+
 #### 8.7.3 条件编译：`-ifdef`, `-ifndef`, `-else`, `-endif`
 
 条件编译允许你根据编译选项包含或排除代码。这在开发/生产环境切换时非常有用：
@@ -2233,9 +2245,9 @@ debug_info(State) -> State.
 -endif.
 
 log_message(Level, Message) ->
-    case Level of
-        debug when ?LOG_LEVEL =:= debug -> io:format("DEBUG: ~s~n", [Message]);
-        error -> io:format("ERROR: ~s~n", [Message]);
+    case {Level, ?LOG_LEVEL} of
+        {debug, debug} -> io:format("DEBUG: ~s~n", [Message]);
+        {error, debug}; {error, error} -> io:format("ERROR: ~s~n", [Message]);
         _ -> ok
     end.
 ```
@@ -2267,7 +2279,7 @@ erlc my_app.erl
 2. **宏名大写**：按约定，宏名使用大写字母
 3. **文档化重要宏**：在模块顶部注释说明宏的作用
 
-#### 8.7.5 完整示例：配置驱动的应用
+#### 8.7.5 宏的综合应用示例：配置驱动的应用
 
 ```erlang
 -module(configurable_app).
