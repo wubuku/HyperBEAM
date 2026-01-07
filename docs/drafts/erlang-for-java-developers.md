@@ -2115,6 +2115,220 @@ fn sha256<'a>(env: Env<'a>, data: Binary) -> NifResult<Term<'a>> {
 rustler::init!("my_nif", [sha256]);
 ```
 
+### 8.7 宏 (Macros) 与预处理
+
+> **为什么 Java 开发者需要了解宏？**
+> Java 开发者通常熟悉 `public static final` 常量，但 Erlang 的宏更强大：它是一种**编译时代码替换机制**，能定义常量、简化重复代码，甚至实现条件编译。这与 C/C++ 的预处理器宏相似，但更安全、更易用。
+
+#### 8.7.1 宏的概念与 Java 类比
+
+**Erlang 宏是什么？**
+
+宏是一种**编译时文本替换机制**。当 Erlang 编译器遇到一个宏时，它会将宏名替换为预定义的代码片段，然后再进行正常的编译。这意味着宏在运行时并不存在——它们在编译阶段就被完全替换了。
+
+**Java 类比：**
+
+| Java 概念 | Erlang 宏类比 | 说明 |
+| :--- | :--- | :--- |
+| `public static final int MAX_SIZE = 100;` | `-define(MAX_SIZE, 100).` | 常量定义 |
+| `#define MAX_SIZE 100` (C/C++) | `-define(MAX_SIZE, 100).` | 预处理器常量 |
+| `#ifdef DEBUG` (C/C++) | `-ifdef(DEBUG).` | 条件编译 |
+
+**核心优势：**
+- **编译时替换**：宏在编译前就被替换，**零运行时开销**
+- **代码复用**：避免重复的常量或代码片段
+- **条件编译**：可以根据编译选项包含/排除代码
+
+#### 8.7.2 宏的语法与使用
+
+##### 基本宏定义：`-define`
+
+```erlang
+-module(my_module).
+
+% 定义简单常量宏
+-define(TIMEOUT, 5000).
+-define(PI, 3.14159).
+-define(APP_NAME, <<"MyApp">>).
+
+% 在代码中使用宏（使用 ? 前缀）
+start_server() ->
+    timer:sleep(?TIMEOUT),
+    io:format("Starting ~s~n", [?APP_NAME]),
+    ok.
+```
+
+编译器会在编译时将 `?TIMEOUT` 替换为 `5000`，将 `?APP_NAME` 替换为 `<<"MyApp">>`。
+
+##### 带参数的宏：函数式宏
+
+Erlang 支持带参数的宏，类似于 C 的函数宏，但更安全：
+
+```erlang
+-module(math_utils).
+
+% 定义带参数的宏：计算圆面积
+-define(AREA(Radius), ?PI * Radius * Radius).
+
+% 定义调试宏
+-define(DEBUG_LOG(Msg), io:format("DEBUG: ~p in ~p:~p~n", [Msg, ?MODULE, ?LINE])).
+
+calculate_area(Radius) ->
+    Area = ?AREA(Radius),  % 会被替换为: Area = ?PI * Radius * Radius,
+    ?DEBUG_LOG({radius, Radius, area, Area}),  % 调试日志
+    Area.
+```
+
+**关键区别：** Erlang 的参数宏不像 C 宏那样容易出错——它不会意外地修改传入的表达式。
+
+##### 内置宏：`?MODULE` 详解
+
+在 [Day 5.4](#54-gen_server---你的第一个-otp-服务器) 中，我们看到了 `?MODULE` 的使用。让我们深入解析：
+
+```erlang
+-module(counter).
+
+start_link() ->
+    % ?MODULE 在编译时会被替换为原子 'counter'
+    gen_server:start_link({local, ?MODULE}, ?MODULE, 0, []).
+```
+
+**`?MODULE` 的工作原理：**
+1. 当编译器遇到 `?MODULE` 时，它会被**自动替换为当前模块的原子名称**
+2. 在 `counter.erl` 中，`?MODULE` → `'counter'`
+3. 在 `user_service.erl` 中，`?MODULE` → `'user_service'`
+
+**为什么有用？**
+- **避免硬编码**：无需手动写模块名，避免重命名时的遗漏
+- **动态注册**：在 `gen_server` 中用作进程注册名
+- **自引用**：模块可以引用自身而不依赖具体名称
+
+其他常用内置宏：
+- `?LINE`：当前行号（用于调试）
+- `?FILE`：当前文件名
+
+#### 8.7.3 条件编译：`-ifdef`, `-ifndef`, `-else`, `-endif`
+
+条件编译允许你根据编译选项包含或排除代码。这在开发/生产环境切换时非常有用：
+
+```erlang
+-module(my_app).
+
+% 调试相关函数，只在 DEBUG 模式下编译
+-ifdef(DEBUG).
+debug_info(State) ->
+    io:format("DEBUG: State = ~p~n", [State]),
+    State.
+-else.
+debug_info(State) -> State.
+-endif.
+
+% 条件编译示例：开发环境 vs 生产环境
+-ifdef(DEVELOPMENT).
+% 开发环境：启用详细日志和测试功能
+-define(LOG_LEVEL, debug).
+-else.
+% 生产环境：只记录错误
+-define(LOG_LEVEL, error).
+-endif.
+
+log_message(Level, Message) ->
+    case Level of
+        debug when ?LOG_LEVEL =:= debug -> io:format("DEBUG: ~s~n", [Message]);
+        error -> io:format("ERROR: ~s~n", [Message]);
+        _ -> ok
+    end.
+```
+
+**编译时控制：**
+
+```bash
+# 开发环境编译（启用 DEBUG）
+erlc -DDEBUG -DDEVELOPMENT my_app.erl
+
+# 生产环境编译
+erlc my_app.erl
+```
+
+#### 8.7.4 宏的最佳实践与注意事项
+
+**✅ 推荐用法：**
+- **常量定义**：用宏定义配置常量、超时值等
+- **重复代码消除**：将常用的表达式封装为宏
+- **条件编译**：开发/生产环境切换，调试代码开关
+
+**⚠️ 需要谨慎的地方：**
+- **过度抽象**：复杂的参数宏可能让代码难以理解
+- **调试困难**：宏在运行时不存在，无法在调试器中看到
+- **命名冲突**：宏名是全局的，避免与其他模块冲突
+
+**经验法则：**
+1. **优先使用函数而非宏**：宏是最后手段
+2. **宏名大写**：按约定，宏名使用大写字母
+3. **文档化重要宏**：在模块顶部注释说明宏的作用
+
+#### 8.7.5 完整示例：配置驱动的应用
+
+```erlang
+-module(configurable_app).
+
+% ===========================================
+% 配置宏：通过编译选项控制行为
+% ===========================================
+
+% 数据库配置
+-ifdef(USE_POSTGRESQL).
+-define(DB_MODULE, postgresql_driver).
+-define(DB_CONFIG, #{host => "localhost", port => 5432}).
+-else.
+-define(DB_MODULE, sqlite_driver).
+-define(DB_CONFIG, #{file => "app.db"}).
+-endif.
+
+% 缓存配置
+-ifdef(ENABLE_CACHE).
+-define(CACHE_MODULE, ets_cache).
+-else.
+-define(CACHE_MODULE, no_cache).
+-endif.
+
+% 常量定义
+-define(DEFAULT_TIMEOUT, 30000).
+-define(MAX_RETRIES, 3).
+
+% ===========================================
+% 应用代码
+% ===========================================
+
+start() ->
+    io:format("Starting ~s with ~p~n", [?MODULE, ?DB_MODULE]),
+    % 初始化数据库
+    ?DB_MODULE:init(?DB_CONFIG),
+    % 初始化缓存
+    ?CACHE_MODULE:init(),
+    ok.
+
+query_data(Key) ->
+    case ?CACHE_MODULE:get(Key) of
+        {ok, Value} -> {cached, Value};
+        not_found ->
+            % 从数据库查询
+            case ?DB_MODULE:query(Key, ?DEFAULT_TIMEOUT) of
+                {ok, Value} ->
+                    ?CACHE_MODULE:put(Key, Value),
+                    {fresh, Value};
+                {error, Reason} -> {error, Reason}
+            end
+    end.
+
+% 编译选项示例：
+% erlc -DUSE_POSTGRESQL -DENABLE_CACHE configurable_app.erl
+% erlc -DENABLE_CACHE configurable_app.erl  % 使用默认 SQLite
+% erlc configurable_app.erl                 % 最简配置
+```
+
+这个示例展示了宏如何实现配置驱动的架构，让同一份代码可以适应不同的部署环境。
+
 ---
 
 ## 🎉 现在你可以完全看懂 HyperBEAM 教程了！
@@ -2153,7 +2367,7 @@ rustler::init!("my_nif", [sha256]);
 - System introspection
 
 **模块系统：**
-- Module basics, compile directives, type specifications
+- Module basics, compile directives, type specifications, macros
 
 **NIFs：**
 - C NIFs basics, working with binaries
