@@ -2348,27 +2348,186 @@ loop() = 一个无限的"等待消息 → 处理消息 → 继续等待"的循�
 
 ### 7.4 端口（外部程序）
 
+**Port** 是 Erlang 与**外部程序**通信的桥梁。可以：
+- 运行 shell 命令
+- 读取命令输出
+- 发送数据给外部程序
+- 接收程序的返回结果
+
+#### 启动外部程序
+
 ```erlang
-% 启动外部程序
 Port = open_port({spawn, "python script.py"}, [
     binary,
     {packet, 4},
     exit_status
-]),
+])
+```
 
-% 发送数据
-Port ! {self(), {command, <<"input">>}},
+**解释：**
+- `open_port()` 打开一个 port（通道）
+- `{spawn, "python script.py"}`：启动外部命令
+  - `spawn`：表示创建一个新进程运行命令
+  - `"python script.py"`：要运行的 shell 命令
+- 第二个参数是**选项列表**：
+  - `binary`：数据以**二进制**形式返回（`<<"hello">>`），而不是列表
+  - `{packet, 4}`：数据包格式（4字节长度前缀）
+  - `exit_status`：当程序结束时，接收 `{Port, {exit_status, Code}}` 消息
+- `Port` 是这个通道的**引用**，用来标识这个 port
 
-% 接收输出
+#### 发送数据
+
+```erlang
+Port ! {self(), {command, <<"input">>}}
+```
+
+**解释：**
+- 通过消息发送数据给外部程序
+- `{self(), {command, <<"input">>}}`：消息格式
+  - `self()`：当前进程的 PID
+  - `{command, <<"input">>}`：要发送的数据
+- `!` 是 Erlang 的消息发送操作符
+
+#### 接收输出
+
+```erlang
 receive
     {Port, {data, Output}} ->
         handle_output(Output);
     {Port, {exit_status, Status}} ->
         done
-end,
-
-port_close(Port).
+end
 ```
+
+**解释：**
+- `receive` 等待来自 port 的消息
+- **`{Port, {data, Output}}` 是固定的消息格式**
+  ```
+  {Port,        % 这个 port 发来的消息
+   {data, Output} % "data" 是原子，Output 是实际数据的变量
+  }
+  ```
+  这里的 `data` **确实是一个固定值**（原子），它是 Erlang 定义的特殊原子，表示"这是来自 port 的数据"。
+- `Output` 是一个**变量**，会被绑定到实际接收到的数据
+- `{Port, {exit_status, Status}}`：程序结束时收到的消息
+  - `exit_status` 表示程序退出
+  - `Status` 是退出码（0=成功）
+
+#### 关闭端口
+
+```erlang
+port_close(Port)
+```
+
+**解释：**
+- 关闭 port，释放资源
+- 这是清理操作，防止资源泄漏
+
+#### Port 消息的格式
+
+这是 Erlang 定义的**固定格式**，你必须这样接收：
+
+| 消息类型 | 格式 | 含义 |
+|---------|------|------|
+| 数据 | `{Port, {data, Data}}` | port 发送数据 |
+| 文件结束 | `{Port, eof}` | port 关闭 |
+| 退出状态 | `{Port, {exit_status, Code}}` | 程序结束，返回码 |
+| 错误 | `{Port, {exit_status, Code}}` | 程序出错 |
+
+**关键点：`data`、`eof`、`exit_status` 都是 Erlang 规定的原子，不能改！**
+
+#### 完整工作流程
+
+```
+1. open_port() 打开 port
+   ↓
+2. 运行命令 "python script.py"
+   ↓
+3. 程序运行，产生输出
+   ↓
+4. 接收数据消息：{Port, {data, <<"output">>}}
+   ↓
+5. 程序结束，exit status
+   ↓
+6. 接收退出消息：{Port, {exit_status, 0}}
+   ↓
+7. port_close(Port) 清理资源
+```
+
+#### 实际完整例子
+
+```erlang
+%% 运行 shell 命令并获取输出
+run_command(Command) ->
+    Port = open_port({spawn, Command}, [
+        stream,
+        exit_status,
+        use_stdio,
+        binary,
+        eof
+    ]),
+    receive_output(Port, []).
+
+%% 接收 port 的所有输出
+receive_output(Port, Acc) ->
+    receive
+        {Port, {data, Data}} ->
+            %% 继续接收更多数据
+            receive_output(Port, [Data | Acc]);
+
+        {Port, {exit_status, Code}} ->
+            %% 程序结束
+            Output = list_to_binary(lists:reverse(Acc)),
+            {Code, Output};
+
+        {Port, eof} ->
+            %% EOF
+            Output = list_to_binary(lists:reverse(Acc)),
+            {0, Output}
+    after 5000 ->
+        {error, timeout}
+    end.
+
+%% 使用
+test() ->
+    {Code, Output} = run_command("echo 'Hello World'"),
+    io:format("返回码: ~w~n", [Code]),
+    io:format("输出: ~w~n", [Output]).
+```
+
+#### 关键点总结
+
+✓ **`data` 是固定的原子** — Erlang 规定的，表示 port 发来的数据
+
+✓ **`{Port, {data, Data}}` 是固定格式** — 这是 port 消息的标准结构
+
+✓ **`Data` 是变量** — 会被绑定到实际接收到的内容
+
+✓ **`exit_status` 也是固定原子** — 表示程序返回码
+
+✓ **必须用 `receive` 接收** — port 通信是基于消息的
+
+✓ **二进制格式** — 因为选项里有 `binary`，否则会是列表
+
+#### 消息格式速查表
+
+```erlang
+%% 这些都是固定的格式，你必须这样写：
+
+% 接收数据
+receive {Port, {data, Data}} -> ... end
+
+% 接收文件结束
+receive {Port, eof} -> ... end
+
+% 接收退出状态
+receive {Port, {exit_status, Code}} -> ... end
+
+% 接收错误
+receive {Port, {error, Reason}} -> ... end
+```
+
+这些**不能改**，因为它们是 Erlang runtime 规定的消息格式！
 
 ### 7.5 引用 (References)
 
@@ -2390,17 +2549,230 @@ request(Pid, Msg) ->
 
 ### 7.6 属性列表 (Proplists)
 
+`proplists` 是一个用于处理**属性列表**的模块。属性列表是键值对的列表，常用于配置、参数传递等场景。
+
+#### 创建属性列表（Create）
+
 ```erlang
-% 创建
-Props = [{name, <<"Alice">>}, {age, 25}],
+Props = [{name, <<"Alice">>}, {age, 25}]
+```
 
-% 访问
-proplists:get_value(name, Props),      % <<"Alice">>
-proplists:get_value(missing, Props, default), % default
+**解释：**
+- 创建一个属性列表，就是一个**列表，包含多个二元元组**
+- `{name, <<"Alice">>}`：键是 `name`，值是二进制字符串 `<<"Alice">>`
+  - `<<...>>` 是 Erlang 的**二进制字符串**语法
+- `{age, 25}`：键是 `age`，值是整数 `25`
+- 这就是一个简单的**键值对集合**
 
-% 布尔标志
-Props2 = [verbose, {debug, false}],
-proplists:get_bool(verbose, Props2).  % true
+**更多例子：**
+```erlang
+% 简单的属性列表
+Config = [{host, "localhost"}, {port, 8080}, {timeout, 5000}],
+
+% 可以混合不同类型的值
+Settings = [{user, "admin"}, {enabled, true}, {options, [1,2,3]}]
+```
+
+#### 访问属性值（Access）
+
+```erlang
+proplists:get_value(name, Props)      % <<"Alice">>
+```
+
+**解释：**
+- 从属性列表 `Props` 中获取键 `name` 对应的值
+- 返回：`<<"Alice">>`
+- 这是最常用的操作
+
+```erlang
+proplists:get_value(missing, Props, default) % default
+```
+
+**解释：**
+- 尝试获取键 `missing` 的值
+- 如果键不存在，返回**第三个参数作为默认值** `default`
+- 返回：`default`
+- 这很重要，可以**避免程序崩溃**
+
+**对比：**
+```erlang
+% 不提供默认值
+proplists:get_value(missing, Props)  % 返回 undefined
+
+% 提供默认值
+proplists:get_value(missing, Props, default)  % 返回 default
+```
+
+#### 布尔标志（Boolean flags）
+
+```erlang
+Props2 = [verbose, {debug, false}]
+```
+
+**解释：**
+- 属性列表可以包含两种形式：
+  - `verbose`：**原子形式**，表示一个标志存在
+  - `{debug, false}`：**键值对形式**，明确指定值
+
+这很灵活，可以用来表示开/关选项。
+
+```erlang
+proplists:get_bool(verbose, Props2)  % true
+```
+
+**解释：**
+- `get_bool()` 是专门用来获取**布尔值**的函数
+- 对于原子形式 `verbose`（没有值的）：返回 `true`
+- 对于键值对形式：返回对应的布尔值
+
+**详细规则：**
+```erlang
+Props2 = [verbose, {debug, false}, {enabled, true}],
+
+proplists:get_bool(verbose, Props2),   % true  (原子存在 = true)
+proplists:get_bool(debug, Props2),     % false (值是 false)
+proplists:get_bool(enabled, Props2),   % true  (值是 true)
+proplists:get_bool(missing, Props2)    % false (不存在 = false)
+```
+
+#### 完整实际例子
+
+**场景：解析命令行选项**
+
+```erlang
+%% 定义选项
+Options = [
+    {host, "localhost"},
+    {port, 8080},
+    verbose,           % 标志：冗长模式
+    {debug, false},
+    {timeout, 5000}
+],
+
+%% 获取值
+Host = proplists:get_value(host, Options),              % "localhost"
+Port = proplists:get_value(port, Options),              % 8080
+Timeout = proplists:get_value(timeout, Options, 3000),  % 5000
+Missing = proplists:get_value(ssl, Options, false),     % false（默认值）
+
+%% 获取布尔标志
+IsVerbose = proplists:get_bool(verbose, Options),  % true
+IsDebug = proplists:get_bool(debug, Options),      % false
+IsSSL = proplists:get_bool(ssl, Options),          % false（不存在）
+
+io:format("连接到 ~s:~w, 超时 ~w ms~n", [Host, Port, Timeout]),
+io:format("冗长模式: ~w, 调试: ~w, SSL: ~w~n", [IsVerbose, IsDebug, IsSSL]).
+```
+
+**输出：**
+```
+连接到 localhost:8080, 超时 5000 ms
+冗长模式: true, 调试: false, SSL: false
+```
+
+#### 常用的 proplists 函数
+
+| 函数 | 用途 | 示例 |
+|------|------|------|
+| `get_value(Key, List)` | 获取值，不存在返回 `undefined` | `proplists:get_value(name, Props)` |
+| `get_value(Key, List, Default)` | 获取值，不存在返回默认值 | `proplists:get_value(age, Props, 18)` |
+| `get_bool(Key, List)` | 获取布尔值（原子=true，不存在=false） | `proplists:get_bool(verbose, Props)` |
+| `lookup(Key, List)` | 查找，返回 `{Key, Value}` 或 `none` | `proplists:lookup(name, Props)` |
+| `delete(Key, List)` | 删除某个键 | `proplists:delete(age, Props)` |
+| `substitute_negations(Negs, List)` | 处理否定形式 | — |
+
+#### 更多高级用法
+
+**获取所有值（如果键重复）**
+```erlang
+%% 属性列表允许重复键
+Props = [{tag, a}, {tag, b}, {tag, c}],
+
+% 只获取第一个
+proplists:get_value(tag, Props)  % a
+
+% 获取所有值
+proplists:get_all_values(tag, Props)  % [a, b, c]
+```
+
+**查找并返回键值对**
+```erlang
+Props = [{name, "Alice"}, {age, 25}],
+
+% lookup 返回元组或 none
+proplists:lookup(name, Props)   % {name, "Alice"}
+proplists:lookup(missing, Props)  % none
+```
+
+**删除键**
+```erlang
+Props = [{name, "Alice"}, {age, 25}],
+proplists:delete(age, Props)  % [{name, "Alice"}]
+```
+
+**展开选项（处理否定形式）**
+```erlang
+% 有时需要处理 {no_verbose} 这样的否定形式
+Options = [{verbose, false}, {debug, true}],
+Negations = [{no_verbose, verbose}, {no_debug, debug}],
+
+proplists:substitute_negations(Negations, Options)
+```
+
+#### proplists vs maps vs records
+
+| 工具 | 用途 | 优点 | 缺点 |
+|------|------|------|------|
+| **proplists** | 动态配置、选项参数 | 灵活、允许重复键 | 查询慢 O(n) |
+| **maps** | 固定键值集合 | 查询快 O(1)、现代 | 不能有重复键 |
+| **records** | 强类型结构体 | 类型安全、查询快 | 需要提前定义 |
+
+**选择建议：**
+- 配置文件、命令行选项 → `proplists`
+- JSON 数据、JSON 解析 → `maps`
+- 业务数据结构 → `records`
+
+#### 关键点总结
+
+✓ **属性列表 = 键值对列表** — `[{key1, value1}, {key2, value2}]`
+
+✓ **支持两种形式** — `verbose` 或 `{verbose, true}`
+
+✓ **`get_value()` 是最常用的** — 记得提供默认值避免 `undefined`
+
+✓ **`get_bool()` 处理布尔特殊逻辑** — 原子=true，不存在=false
+
+✓ **允许重复键** — 但 `get_value()` 只返回第一个，用 `get_all_values()` 获取全部
+
+✓ **查询性能是 O(n)** — 如果性能要求高，考虑用 `maps`
+
+#### 实际应用
+
+**应用 1：HTTP 请求选项**
+```erlang
+HttpOpts = [
+    {host, "api.example.com"},
+    {port, 443},
+    {ssl, true},
+    timeout,  % 表示启用超时
+    {timeout_ms, 5000}
+],
+
+Host = proplists:get_value(host, HttpOpts),
+UseSSL = proplists:get_bool(ssl, HttpOpts),
+```
+
+**应用 2：函数选项参数**
+```erlang
+process_data(Data, Options) ->
+    Verbose = proplists:get_bool(verbose, Options),
+    Timeout = proplists:get_value(timeout, Options, 3000),
+    Retry = proplists:get_value(retry, Options, 3),
+    ...
+end.
+
+% 调用
+process_data(MyData, [{timeout, 5000}, verbose, {retry, 5}])
 ```
 
 ### 7.7 位运算
