@@ -1658,37 +1658,446 @@ re:replace(<<"hello">>, <<"l">>, <<"L">>, [global]), % <<"heLLo">>
 > **核心价值：高性能的堆外共享缓存**
 > 对于 Java 开发者而言，可以将 ETS (Erlang Term Storage) 类比为 JVM 外部（Off-Heap）的一个极其高效的 `ConcurrentHashMap`，但功能更强大，且**不需要担心 Java GC 暂停**。它是 Erlang/OTP 生态系统中最常用的高性能键值存储之一，常用于进程间共享数据、缓存、查找表和大型数据集。它位于 BEAM VM 的堆外内存中，这意味着它不会影响 Erlang 进程的垃圾回收周期，从而保证了极低的延迟和极高的吞吐量。
 
+ETS 是 Erlang 中用于存储键值对的内存表格系统。以下是详细的逐行解释：
+
+#### ETS 基本操作详解
+
 ```erlang
-% 创建表
-Table = ets:new(my_table, [set, public, named_table]),
-
-% 插入
-ets:insert(my_table, {key1, <<"value1">>}),
-ets:insert(my_table, [{k1, v1}, {k2, v2}]),
-
-% 查询
-ets:lookup(my_table, key1),    % [{key1,"value1"}]
-ets:member(my_table, key1),    % true
-
-% 删除
-ets:delete(my_table, key1),
-ets:delete(my_table).          % 删除表
+%% 创建表格
+T = ets:new(my_table, [set, public]),
 ```
+
+**解释：**
+- `ets:new()` 创建一个新的 ETS 表格
+- `my_table` 是表格的名称
+- `[set, public]` 是选项列表：
+    - `set`：表示表格类型为集合，**每个键只能有一个值**（如果重复插入同一个键，会覆盖旧值）
+    - `public`：表示表格可以被其他进程访问和修改
+- `T` 是表格的引用（handle），后续所有操作都通过这个引用来进行
+
+```erlang
+%% 插入单条数据
+ets:insert(T, {key, value}),
+```
+
+**解释：**
+- 向表格 `T` 中插入一条数据
+- `{key, value}` 是一个**元组**（tuple），其中：
+    - `key` 是键
+    - `value` 是值
+- 如果 `key` 已经存在，新值会覆盖旧值
+
+```erlang
+%% 插入多条数据
+ets:insert(T, [{k1, v1}, {k2, v2}]),
+```
+
+**解释：**
+- 一次性插入**多条**数据
+- `[{k1, v1}, {k2, v2}]` 是一个列表，包含多个元组
+- 这样比逐条插入更高效
+
+```erlang
+%% 查询数据
+ets:lookup(T, key),                          % [{key, value}]
+```
+
+**解释：**
+- `ets:lookup()` 根据键查找对应的值
+- 返回一个**列表**：
+    - 如果找到：返回 `[{key, value}]`（列表中包含一个元组）
+    - 如果没找到：返回 `[]`（空列表）
+- 注意：即使只找到一条记录，也会用列表包装
+
+```erlang
+%% 删除单条数据
+ets:delete(T, key),
+```
+
+**解释：**
+- 删除表格 `T` 中键为 `key` 的这一条记录
+- 只删除一条数据，表格本身仍然存在
+
+```erlang
+%% 删除整个表格
+ets:delete(T),                               % Delete table
+```
+
+**解释：**
+- 删除整个表格 `T`
+- 这会释放表格占用的内存
+- 如果忘记删除，表格会一直占用内存
+
+```erlang
+%% 检查键是否存在
+ets:member(T, key),                              % true | false
+```
+
+**解释：**
+- 检查键 `key` 是否存在于表格 `T` 中
+- 返回值：
+    - `true`：键存在
+    - `false`：键不存在
+- 这比 `lookup()` 更高效，如果你只需要知道是否存在某个键
+
+```erlang
+%% 获取所有数据
+ets:tab2list(T),                                 % [{k1, v1}, {k2, v2}, ...]
+```
+
+**解释：**
+- 将整个表格转换为**列表**
+- 返回表格中所有的键值对
+- 返回格式：`[{键1, 值1}, {键2, 值2}, ...]`
+- 注意：如果表格很大，这个操作会比较耗时和耗内存
+
+```erlang
+%% 获取表格信息
+ets:info(T, size),                               % Number of entries
+```
+
+**解释：**
+- 获取表格 `T` 的信息
+- `size` 参数表示获取表格中**条目数量**
+- 返回值是一个整数，表示当前表格中有多少条记录
+- `ets:info()` 还可以获取其他信息，如 `name`、`type` 等
+
+#### 完整使用示例
+
+```erlang
+% 创建表格
+T = ets:new(my_table, [set, public]),
+
+% 插入数据
+ets:insert(T, {name, "张三"}),
+ets:insert(T, {age, 25}),
+
+% 查询数据
+ets:lookup(T, name),          % 返回 [{name, "张三"}]
+ets:member(T, age),            % 返回 true
+
+% 查看所有数据
+ets:tab2list(T),               % [{name, "张三"}, {age, 25}]
+
+% 统计条目数
+ets:info(T, size),             % 返回 2
+
+% 删除某个键
+ets:delete(T, age),
+
+% 最后清理资源
+ets:delete(T)
+```
+
+#### ETS 表格类型详解
+
+ETS 支持四种表格类型，在**键的唯一性**和**排序**方面有不同的特性：
+
+##### set（集合）- 最常用
+
+**特点：唯一键，无序**
+
+```erlang
+T = ets:new(my_table, [set]),
+ets:insert(T, {key1, value1}),
+ets:insert(T, {key1, value2}),  % 覆盖前一条，现在是 {key1, value2}
+ets:tab2list(T)  % [{key1, value2}]
+```
+
+- 每个键只能有**一个值**
+- 如果插入相同的键，会**覆盖**旧值
+- 插入顺序**不保证**存储顺序
+- 这是**最常用**的类型，类似于 Java 的 `HashMap`
+
+##### ordered_set（有序集合）
+
+**特点：唯一键，按键排序**
+
+```erlang
+T = ets:new(my_table, [ordered_set]),
+ets:insert(T, {3, "c"}),
+ets:insert(T, {1, "a"}),
+ets:insert(T, {2, "b"}),
+ets:tab2list(T)  % [{1, "a"}, {2, "b"}, {3, "c"}]  按键从小到大排序
+```
+
+- 每个键也只能有**一个值**
+- 数据按**键的大小自动排序**
+- 查询速度比 `set` 稍慢一点
+- 适合需要范围查询或有序遍历的场景
+
+##### bag（袋子）
+
+**特点：允许重复键，但每个键值对唯一，无序**
+
+```erlang
+T = ets:new(my_table, [bag]),
+ets:insert(T, {key1, value1}),
+ets:insert(T, {key1, value1}),  % 重复插入，会被忽略（相同的键值对只存一份）
+ets:insert(T, {key1, value2}),  % 不同的值，允许插入
+ets:tab2list(T)  % [{key1, value1}, {key1, value2}]
+```
+
+- 允许**同一个键对应多个值**
+- 但**相同的键值对**只能存一份（会自动去重）
+- 键值对没有特殊排序
+- 适合需要一对多关系的场景
+
+##### duplicate_bag（重复袋子）
+
+**特点：允许完全重复的键值对，无序**
+
+```erlang
+T = ets:new(my_table, [duplicate_bag]),
+ets:insert(T, {key1, value1}),
+ets:insert(T, {key1, value1}),  % 允许插入，现在有两条完全相同的记录
+ets:insert(T, {key1, value2}),
+ets:tab2list(T)  % [{key1, value1}, {key1, value1}, {key1, value2}]
+```
+
+- 允许**完全重复**的键值对
+- 同一个键可以对应多个相同的值
+- 没有排序
+- 适合需要记录日志或事件的场景
+
+#### ETS 表格类型对比
+
+| 特性 | set | ordered_set | bag | duplicate_bag |
+| :-- | :-- | :-- | :-- | :-- |
+| 键唯一性 | ✓ | ✓ | ✗ | ✗ |
+| 值重复 | ✗ | ✗ | ✓ | ✓ |
+| 完全重复 | ✗ | ✗ | ✗ | ✓ |
+| 有序 | ✗ | ✓ | ✗ | ✗ |
+| 查询速度 | 快 | 中 | 快 | 快 |
+| 常见用途 | 缓存、配置 | 范围查询、排序 | 一对多映射 | 日志、事件记录 |
+
+#### 如何选择 ETS 表格类型？
+
+1. **优先用 `set`** — 大多数场景都适用，性能最好
+2. **需要排序用 `ordered_set`** — 排行榜、时间序列
+3. **需要一对多用 `bag`** — 标签、分类关系
+4. **需要完全重复用 `duplicate_bag`** — 日志、审计跟踪
 
 ### 7.2 定时器
 
+`timer` 模块用于处理**延迟、定时任务和性能测量**。以下是详细的逐行解释：
+
+#### 睡眠（Sleep）
+
 ```erlang
-% 发送延迟消息
-timer:send_after(1000, self(), timeout),
-
-% 定期消息
-{ok, Ref} = timer:send_interval(1000, self(), tick),
-timer:cancel(Ref),
-
-% 测量执行时间
-{Time, Result} = timer:tc(fun() -> expensive() end),
-Time.  % 微秒
+timer:sleep(1000)
 ```
+
+**解释：**
+- 让当前进程**暂停执行** 1000 毫秒（1 秒）
+- `1000` 的单位是**毫秒**
+- 这是一个**阻塞操作**，暂停期间进程什么都做不了
+- 常用于测试或需要延迟的场景
+
+**例子：**
+
+```erlang
+io:format("开始~n"),
+timer:sleep(2000),
+io:format("2秒后~n")  % 会延迟 2 秒才打印
+```
+
+#### 延迟发送消息（Send after delay）
+
+```erlang
+timer:send_after(1000, self(), timeout)
+```
+
+**解释：**
+- 在 **1000 毫秒后**，向当前进程发送一条消息
+- `1000`：延迟时间（毫秒）
+- `self()`：目标进程（这里是当前进程自己）
+- `timeout`：要发送的**消息内容**
+- **不阻塞**进程，进程可以继续执行其他代码
+
+**工作原理：**
+
+```erlang
+% 发送消息
+timer:send_after(2000, self(), hello),
+
+% 进程继续执行
+io:format("消息已安排，1秒后发送~n"),
+
+% 接收消息
+receive
+    hello ->
+        io:format("收到 hello 消息~n")
+after 3000 ->  % 超时 3 秒
+    io:format("没收到消息~n")
+end
+```
+
+**发送给其他进程：**
+
+```erlang
+OtherPid = spawn(...),
+timer:send_after(1000, OtherPid, alert)  % 向其他进程发送
+```
+
+#### 定期发送消息（Periodic）
+
+```erlang
+{ok, Ref} = timer:send_interval(1000, self(), tick)
+```
+
+**解释：**
+- 每隔 **1000 毫秒**发送一次消息 `tick` 给当前进程
+- `{ok, Ref}`：返回一个**引用**（Reference）
+    - `ok` 表示成功
+    - `Ref` 是这个定时任务的**唯一标识**，用来后续取消
+- **不阻塞**进程，会不断重复发送
+
+```erlang
+timer:cancel(Ref)
+```
+
+**解释：**
+- **取消**之前设置的定时任务
+- 使用 `send_interval()` 返回的 `Ref` 来标识要取消哪个任务
+- 取消后不会再发送消息
+
+**完整例子：**
+
+```erlang
+% 启动定时任务
+{ok, Ref} = timer:send_interval(1000, self(), tick),
+
+% 进程接收 5 次消息
+receive_ticks(5) ->
+    receive
+        tick ->
+            io:format("第 5 次~n"),
+            timer:cancel(Ref),  % 接收 5 次后取消
+            ok
+    end;
+receive_ticks(N) ->
+    receive
+        tick ->
+            io:format("第 ~w 次~n", [6-N]),
+            receive_ticks(N-1)
+    end.
+```
+
+#### 测量执行时间（Measure time）
+
+```erlang
+{Time, Result} = timer:tc(fun() ->
+    expensive()
+end)
+```
+
+**解释：**
+- `timer:tc()` **测量**一个函数的执行时间
+- `fun() -> expensive() end`：一个**匿名函数**，里面调用 `expensive()` 函数
+- 返回值是一个**二元元组** `{Time, Result}`：
+    - `Time`：执行时间，单位是**微秒**（microsecond）
+    - `Result`：函数的**返回值**
+
+```erlang
+%% Time in microseconds
+```
+
+**解释：**
+- 注释提醒：`Time` 的单位是**微秒**，不是毫秒
+- 1 秒 = 1000 毫秒 = 1,000,000 微秒
+
+**完整例子：**
+
+```erlang
+expensive() ->
+    timer:sleep(1000),  % 睡眠 1 秒
+    {ok, "完成"}.
+
+test() ->
+    {Time, Result} = timer:tc(fun() -> expensive() end),
+    io:format("执行时间: ~w 微秒~n", [Time]),
+    io:format("返回值: ~w~n", [Result])
+    % 输出：执行时间: 1000000 微秒（或略多一点）
+    % 输出：返回值: {ok, "完成"}
+end.
+```
+
+**转换时间单位：**
+
+```erlang
+{Time, Result} = timer:tc(fun() -> expensive() end),
+TimeMs = Time / 1000,      % 转换为毫秒
+TimeSec = Time / 1000000,  % 转换为秒
+io:format("耗时: ~.2f 秒~n", [TimeSec])  % 显示 2 位小数
+```
+
+#### 时间单位对比
+
+| 函数 | 参数单位 | 返回值单位 |
+| :-- | :-- | :-- |
+| `timer:sleep(X)` | 毫秒 | — |
+| `timer:send_after(X, ...)` | 毫秒 | — |
+| `timer:send_interval(X, ...)` | 毫秒 | — |
+| `timer:tc()` | — | **微秒** ⚠️ |
+
+#### 实际应用场景
+
+**场景 1：定期健康检查**
+
+```erlang
+start_health_check() ->
+    {ok, Ref} = timer:send_interval(5000, self(), check),  % 每 5 秒检查一次
+    loop(Ref).
+
+loop(Ref) ->
+    receive
+        check ->
+            do_health_check(),
+            loop(Ref);
+        stop ->
+            timer:cancel(Ref),
+            io:format("健康检查已停止~n")
+    end.
+```
+
+**场景 2：超时控制**
+
+```erlang
+request_with_timeout(Pid) ->
+    Pid ! {self(), get_data},
+    receive
+        {Pid, Response} ->
+            io:format("收到响应: ~w~n", [Response])
+    after 3000 ->  % 注意：这是内置语法，不是 timer 模块
+        io:format("请求超时~n")
+    end.
+```
+
+**场景 3：性能基准测试**
+
+```erlang
+benchmark() ->
+    {Time, _} = timer:tc(fun() ->
+        lists:sort(lists:seq(1, 100000))  % 排序 10 万个数字
+    end),
+    io:format("排序耗时: ~.3f 毫秒~n", [Time/1000]).
+```
+
+#### 关键注意事项
+
+⚠️ **`send_after()` 和 `send_interval()` 返回值不同：**
+- `send_after()` 返回 `{ok, Ref}` 或 `{error, Reason}`
+- 成功时可以用 `Ref` 来取消
+
+⚠️ **时间精度：**
+- 这些函数不保证**精确的**时间
+- 实际延迟可能比指定的稍长（取决于系统负载）
+- 微秒级精度通常用于测量，不要用于精确控制
+
+⚠️ **`timer:tc()` 返回微秒：**
+- 这是最常见的误区！
+- 记住要除以 1000 或 1,000,000 转换为毫秒或秒
 
 ### 7.3 队列
 
@@ -1702,6 +2111,240 @@ queue:len(Q3),      % 1
 queue:is_empty(Q3), % false
 queue:to_list(Q3).  % [item2]
 ```
+
+### 7.3.1 loop() 函数详解 - Erlang 并发编程的核心
+
+`loop()` 是一个**递归函数**，用于让进程**持续接收消息**。它是 Erlang 并发编程的核心模式。
+
+#### 什么是 loop()?
+
+`loop()` 不是特殊的东西，就是一个**普通函数**，名字叫 `loop`。它的作用是：
+
+1. **接收消息**（`receive`）
+2. **处理消息**
+3. **递归调用自己**（`loop()`），继续接收下一条消息
+
+这样就形成了一个**无限循环**，让进程一直活着并等待消息。
+
+#### 逐行详解
+
+```erlang
+loop() ->
+    receive
+        tick ->
+            io:format("收到一次 tick~n"),
+            loop();
+        stop ->
+            io:format("停止接收~n")
+    end.
+```
+
+**解释：**
+
+```erlang
+loop() ->
+```
+
+- 定义一个无参数的函数 `loop`
+
+```erlang
+    receive
+```
+
+- **等待接收消息**
+- 进程会阻塞在这里，直到收到匹配的消息
+
+```erlang
+        tick ->
+            io:format("收到一次 tick~n"),
+            loop();
+```
+
+- 如果收到消息 `tick`：
+    - 打印 `"收到一次 tick"`
+    - **调用 `loop()` 递归**，继续循环接收下一条消息
+
+```erlang
+        stop ->
+            io:format("停止接收~n")
+```
+
+- 如果收到消息 `stop`：
+    - 打印 `"停止接收"`
+    - **不再调用 `loop()`**，函数结束，进程也会退出
+
+```erlang
+    end.
+```
+
+- `receive` 语句结束
+
+#### 图解流程
+
+```
+启动 loop()
+    ↓
+等待消息
+    ↓
+收到 tick? ─→ 是 ─→ 打印 ─→ 调用 loop() ─→ 回到"等待消息"
+    ↓
+收到 stop? ─→ 是 ─→ 打印 ─→ 函数结束，进程死亡
+    ↓
+等待超时? ─→ 是 ─→ 函数结束，进程死亡
+```
+
+#### 完整实际例子
+
+```erlang
+%% 定义 loop 函数
+loop() ->
+    receive
+        tick ->
+            io:format("收到一次 tick~n"),
+            loop();
+        stop ->
+            io:format("停止接收~n")
+    end.
+
+%% 启动进程
+start() ->
+    spawn(fun() -> loop() end).
+
+%% 发送消息
+test() ->
+    Pid = start(),
+    timer:send_after(500, Pid, tick),   % 0.5 秒后发送 tick
+    timer:send_after(1000, Pid, tick),  % 1 秒后发送 tick
+    timer:send_after(1500, Pid, stop),  % 1.5 秒后发送 stop
+    ok.
+```
+
+**运行结果：**
+
+```
+% 0.5 秒：收到一次 tick
+% 1.0 秒：收到一次 tick
+% 1.5 秒：停止接收
+% 进程结束
+```
+
+#### loop() 为什么要递归？
+
+因为在 Erlang 中**没有 while 循环**！要实现循环，必须用递归。
+
+**对比其他语言：**
+
+```python
+# Python：用 while 循环
+while True:
+    msg = receive_message()
+    if msg == "stop":
+        break
+    print(f"收到: {msg}")
+```
+
+```erlang
+% Erlang：用递归实现循环
+loop() ->
+    receive
+        stop ->
+            ok;
+        Msg ->
+            io:format("收到: ~w~n", [Msg]),
+            loop()  % 递归调用自己
+    end.
+```
+
+#### 更复杂的例子：带状态的 loop
+
+`loop()` 也可以**传递参数**来维护状态：
+
+```erlang
+%% 带计数器的 loop
+loop(Count) ->
+    receive
+        tick ->
+            NewCount = Count + 1,
+            io:format("第 ~w 次 tick~n", [NewCount]),
+            loop(NewCount);  % 传递新的计数值
+        stop ->
+            io:format("总共接收 ~w 次 tick~n", [Count])
+    end.
+
+%% 启动
+start() ->
+    spawn(fun() -> loop(0) end).  % 从 0 开始计数
+```
+
+**运行结果：**
+
+```
+第 1 次 tick
+第 2 次 tick
+第 3 次 tick
+总共接收 3 次 tick
+```
+
+#### 常见的 loop 模式
+
+**模式 1：简单循环（无状态）**
+
+```erlang
+loop() ->
+    receive
+        {msg, Data} ->
+            process(Data),
+            loop()
+    end.
+```
+
+**模式 2：带状态的循环**
+
+```erlang
+loop(State) ->
+    receive
+        {update, NewState} ->
+            loop(NewState);
+        {query, From} ->
+            From ! State,
+            loop(State)
+    end.
+```
+
+**模式 3：带超时的循环**
+
+```erlang
+loop(State) ->
+    receive
+        {msg, Data} ->
+            loop(handle(State, Data))
+    after 5000 ->
+        io:format("5秒没收到消息，超时~n"),
+        ok  % 退出循环
+    end.
+```
+
+#### 关键点总结
+
+✓ **`loop()` 就是普通函数** — 没有魔法，只是递归调用自己
+
+✓ **`receive` 用来等待消息** — 进程会在这里阻塞
+
+✓ **模式匹配处理消息** — 不同的消息走不同的分支
+
+✓ **`loop()` 递归调用 = 继续循环** — 不调用 `loop()` = 退出循环
+
+✓ **进程 = loop 运行** — `loop()` 运行，进程就活着；`loop()` 结束，进程就死了
+
+**总结：**
+
+`loop()` 就是让进程**永久活着**、**持续接收消息**的标准写法。你可以把它理解为：
+
+```
+loop() = 一个无限的"等待消息 → 处理消息 → 继续等待"的循环
+```
+
+这是 Erlang 并发编程的**核心模式**！
 
 ### 7.4 端口（外部程序）
 
