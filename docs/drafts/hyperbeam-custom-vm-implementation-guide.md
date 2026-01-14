@@ -159,6 +159,25 @@ This flow ensures HyperBEAM's core characteristics as a "decentralized supercomp
 
 **关键洞察**：执行环境是**可插拔的**，这为自定义 VM 奠定了基础。Lua 合约通过 `luerl:call_function_dec()` 执行，WASM 通过本地运行时执行，皆保证确定性输出。
 
+#### ⚠️ 外部CU委托模式：dev_cu:push() 的特殊执行路径
+
+```erlang
+%% Execute via external CU - 正确的代码片段
+Assignment = #{
+    <<"process">> => ProcessID,
+    <<"slot">> => Slot,
+    <<"message">> => Message
+},
+State = #{
+    assignment => Assignment,  % atom key匹配dev_cu:push/2签名
+    logger => Logger
+},
+{ok, StateWithResults} = dev_cu:push(Message, State),
+Results = maps:get(results, StateWithResults).
+```
+
+**这段代码不在标准执行流程中**，而是代表HyperBEAM网络中CU节点的工作模式：接收来自SU的计算任务，通过`hb_client:compute(Assignment, Msg)`执行，然后返回结果给请求方。它体现了HyperBEAM去中心化计算的核心特性——**计算任务可以在不同的CU节点间分发执行**，而不仅是本地进程执行。
+
 #### ⚠️ 重要澄清：无快照的严重后果
 
 **你的理解完全正确！如果不生成快照，系统会面临严重的性能问题**：
@@ -843,6 +862,20 @@ const processConfig = {
 
 ## 现有实现对比
 
+### dev_cu 设备的角色澄清
+
+`dev_cu`（Compute Unit）设备是**计算任务协调器**，而非执行环境：
+
+- **`push/2`**：接收计算任务，通过`hb_client:compute()`委托给外部CU节点执行
+- **`execute/2`**：处理本地计算请求，调用`hb_process:result()`执行AO进程，支持承诺机制验证
+
+**关键区别**：`dev_cu`不实现业务逻辑，仅协调计算任务分发。**它不是自定义VM的实现模板**。
+
+| 设备类型 | 职责 | 核心接口 | 示例 |
+|---------|------|---------|------|
+| **执行环境设备** | 实现代码执行逻辑 | `compute/3`, `init/3`, `snapshot/3` | `dev_lua`, `dev_wasm` |
+| **协调器设备** | 路由和分发计算任务 | `push/2`, `execute/2` | `dev_cu` |
+
 ### Lua VM 实现分析
 
 ```erlang
@@ -907,20 +940,9 @@ compute(Base, Req, Opts) ->
 3. **调试复杂性**：多语言栈的调试更复杂
 4. **信任模型**：微服务运行在节点本地，需要信任节点
 
-## 结论
+## 实现细节补充
 
-**你的观点完全正确！** 通过开发一个确定性的微服务并用薄层的 Erlang 设备暴露 API，你确实可以创建自己的 VM。这种方法：
-
-1. **符合 HyperBEAM 架构**：利用 Actor 模型和 slot 机制
-2. **保持语言自由**：可以用任何语言实现核心逻辑
-3. **保证可验证性**：通过 TEE 和密码学保证执行完整性
-4. **支持生态集成**：可以复用现有的代码和工具
-
-这就是 **"Your own VM — Any execution environment"** 的实际实现路径。
-
-## 8. 最新实现细节补充
-
-### 8.1 设备接口标准化
+### 设备接口标准化
 
 HyperBEAM 的设备接口正在趋于标准化，所有设备都应该实现以下核心函数：
 
@@ -935,7 +957,7 @@ HyperBEAM 的设备接口正在趋于标准化，所有设备都应该实现以�
 - **`normalize/3`**：从快照恢复状态
 - **`terminate/3`**：设备清理
 
-### 8.2 异步缓存机制
+### 异步缓存机制
 
 HyperBEAM 使用异步缓存来避免阻塞主执行流程：
 
@@ -952,7 +974,7 @@ case hb_opts:get(process_async_cache, true, Opts) of
 end
 ```
 
-### 8.3 多语言运行时支持
+### 多语言运行时支持
 
 除了 Lua 和 WASM，HyperBEAM 还支持通过 NIF（Native Implemented Functions）集成其他语言：
 
@@ -974,7 +996,7 @@ compute(_Key, Base, Req, _Opts) ->
 
 这种方式提供了零开销的语言集成，适用于性能敏感的应用。
 
-### 8.4 设备栈组合
+    ### 设备栈组合
 
 设备可以组合形成"设备栈"，实现复杂的执行管道：
 
@@ -991,6 +1013,84 @@ compute(_Key, Base, Req, _Opts) ->
 ```
 
 每个设备按顺序处理消息，实现关注点分离。
+
+### 现有执行环境设备的详细剖析
+
+#### WASM 执行环境 (dev_wasm)
+
+**技术实现**：
+- **后端引擎**：使用 WAMR (WebAssembly Micro Runtime)
+- **内存支持**：Memory-64 预览标准，支持大内存应用
+- **生命周期管理**：完整的 WASM 模块初始化、执行、快照和状态恢复
+
+```erlang
+% WASM 模块初始化
+init(M1, M2, Opts) ->
+    ImageBin = % 从 Arweave 或消息体获取 WASM 二进制
+    {ok, Instance, _Imports, _Exports} = hb_beamr:start(ImageBin, Mode)
+
+% 函数调用执行
+compute(RawM1, M2, Opts) ->
+    {ResType, Res, MsgAfterExecution} = hb_beamr:call(Instance, WASMFunction, Params, ImportResolver, M1, Opts)
+```
+
+**核心特性**：
+- **确定性保证**：沙盒化执行确保输入输出一致性
+- **高性能**：编译为机器码，比解释型语言更快
+- **内存安全**：线性内存模型提供内存安全保证
+- **生态集成**：通过 import-resolver 支持外部函数调用
+
+#### Lua 脚本环境 (dev_lua)
+
+**技术实现**：
+- **VM 引擎**：集成 Erlang Lua 运行时 (luerl)
+- **模块系统**：支持从 Arweave 加载 Lua 模块
+- **安全沙盒**：严格限制危险操作
+
+```erlang
+% 安全沙盒定义
+-define(DEFAULT_SANDBOX, [
+    {['_G', io], <<"sandboxed">>},        % 禁用文件 I/O
+    {['_G', os, execute], <<"sandboxed">>}, % 禁用系统命令
+    {['_G', loadfile], <<"sandboxed">>}   % 禁用文件加载
+]).
+
+% 函数执行
+compute(Key, RawBase, Req, Opts) ->
+    Result = luerl:call_function_dec([Function], encode(Params), State)
+```
+
+**核心特性**：
+- **开发友好**：Lua 语法简洁，易于编写业务逻辑
+- **沙盒安全**：通过 trap_exit 和函数黑名单确保安全
+- **模块复用**：支持代码模块化加载
+- **调试支持**：详细错误堆栈跟踪
+
+#### WASI 文件系统 (dev_wasi)
+
+**技术实现**：
+- **标准兼容**：实现 WASI-preview-1 完整接口
+- **虚拟文件系统**：内存中模拟 POSIX 文件操作
+- **I/O 重定向**：支持 stdin/stdout/stderr 捕获
+
+```erlang
+% 初始化虚拟文件系统
+-define(INIT_VFS, #{
+    <<"dev">> => #{
+        <<"stdin">> => <<>>, <<"stdout">> => <<>>, <<"stderr">> => <<>>
+    }
+}).
+
+% WASI 接口实现
+fd_write(S, Instance, [FD, Ptr, Vecs, RetPtr], BytesWritten, Opts) ->
+    {VecPtr, Len} = parse_iovec(Instance, Ptr),
+    {ok, Data} = hb_beamr_io:read(Instance, VecPtr, Len)
+```
+
+**核心特性**：
+- **跨平台一致性**：统一的 POSIX-like 接口
+- **虚拟化设计**：所有操作在内存中进行
+- **调试便利**：I/O 重定向便于日志收集
 
 ## 结论
 
